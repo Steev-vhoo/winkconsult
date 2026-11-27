@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { z } from "zod";
-import { reserveSeat } from "@/lib/bookings";
-import { db, newId } from "@/lib/db";
+import { getClass } from "@/lib/content";
+import { sql } from "@/lib/db";
 import { notifyNewEnquiry } from "@/lib/notify";
 import { ipHash } from "@/lib/security";
 import { getSettings, hoursFor, slotsFor, waLink } from "@/lib/settings";
@@ -21,10 +21,11 @@ function errorsOf(e: z.ZodError) {
   return out;
 }
 
-async function tooMany(collection: "enquiries" | "bookings", ip: string) {
-  const c = (await db())[collection];
-  const n = await c.countDocuments({ ip_hash: ip, created_at: { $gt: new Date(Date.now() - 3_600_000) } });
-  return n >= MAX_PER_HOUR;
+async function tooMany(table: "enquiries" | "bookings", ip: string) {
+  const rows = table === "enquiries"
+    ? await sql<{ n: number }[]>`select count(*)::int as n from enquiries where ip_hash = ${ip} and created_at > now() - interval '1 hour'`
+    : await sql<{ n: number }[]>`select count(*)::int as n from bookings where ip_hash = ${ip} and created_at > now() - interval '1 hour'`;
+  return rows[0].n >= MAX_PER_HOUR;
 }
 
 /* ---------- Contact / enquiry ---------- */
@@ -47,11 +48,8 @@ export async function submitEnquiry(_: FormState, form: FormData): Promise<FormS
   const ip = await ipHash();
   if (await tooMany("enquiries", ip)) return { ok: false, message: "You've sent several messages already. Please chat with us on WhatsApp instead.", values };
 
-  const id = newId();
-  const t = new Date();
-  await (await db()).enquiries.insertOne({
-    _id: id, ...d, ip_hash: ip, status: "new", notes: "", notified_at: null, notify_error: "", created_at: t, updated_at: t,
-  });
+  const [{ id }] = await sql<{ id: string }[]>`insert into enquiries (name, phone, email, location, service, message, ip_hash)
+            values (${d.name}, ${d.phone}, ${d.email}, ${d.location}, ${d.service}, ${d.message}, ${ip}) returning id`;
   revalidatePath("/admin", "layout");
   // Email staff after the response is sent, so the visitor never waits on (or sees) email problems.
   after(() => notifyNewEnquiry(id).catch((err) => console.error("[enquiry-alert]", err)));
@@ -97,15 +95,23 @@ export async function submitBooking(_: FormState, form: FormData): Promise<FormS
   const s = await getSettings();
 
   if (d.type === "class") {
-    const r = await reserveSeat(d.class_id, { _id: newId(), name: d.name, phone: d.phone, email: d.email, message: d.message, ip_hash: ip });
-    if (!r.ok && r.reason === "closed") return { ok: false, message: "That class is no longer taking bookings.", errors: { class_id: "Choose another class" }, values };
-    if (!r.ok && r.reason === "full") return { ok: false, message: "Sorry, that class is full. Message us on WhatsApp to join the waiting list.", errors: { class_id: "Class is full" }, values };
-    if (!r.ok) return { ok: false, message: "That class was just updated. Please try again.", values };
+    const c = await getClass(d.class_id);
+    if (!c || !c.published || c.status !== "open") return { ok: false, message: "That class is no longer taking bookings.", errors: { class_id: "Choose another class" }, values };
+    // Lock the class row so two last-seat bookings can't both succeed.
+    const result = await sql.begin(async (tx) => {
+      await tx`select id from classes where id = ${c.id} for update`;
+      const [{ n }] = await tx<{ n: number }[]>`select count(*)::int as n from bookings where class_id = ${c.id} and status in ('pending','confirmed')`;
+      if (n >= c.capacity) return "full";
+      await tx`insert into bookings (type, class_id, name, phone, email, message, ip_hash)
+               values ('class', ${c.id}, ${d.name}, ${d.phone}, ${d.email}, ${d.message}, ${ip})`;
+      return "ok";
+    });
+    if (result === "full") return { ok: false, message: "Sorry, that class is full. Message us on WhatsApp to join the waiting list.", errors: { class_id: "Class is full" }, values };
     revalidatePath("/", "layout");
     return {
       ok: true,
-      message: `Thank you, ${d.name.split(" ")[0]}! Your seat in “${r.title}” is reserved. We'll contact you to confirm and share payment details.`,
-      waUrl: waLink(s.contact.whatsapp, `Hello WiNK CONSULT, I just booked a seat in "${r.title}" on your website. Name: ${d.name}`),
+      message: `Thank you, ${d.name.split(" ")[0]}! Your seat in “${c.title}” is reserved. We'll contact you to confirm and share payment details.`,
+      waUrl: waLink(s.contact.whatsapp, `Hello WiNK CONSULT, I just booked a seat in "${c.title}" on your website. Name: ${d.name}`),
     };
   }
 
@@ -118,12 +124,8 @@ export async function submitBooking(_: FormState, form: FormData): Promise<FormS
   if (!slots.length) return { ok: false, message: "We're closed on that day. Please choose another date.", errors: { preferred_date: "We're closed that day" }, values };
   if (!slots.includes(d.preferred_time)) return { ok: false, message: "Please choose one of the available times.", errors: { preferred_time: "Choose an available time" }, values };
 
-  const t = new Date();
-  await (await db()).bookings.insertOne({
-    _id: newId(), type: "consultation", class_id: null, class_title: "", name: d.name, phone: d.phone, email: d.email,
-    topic: d.topic, preferred_date: d.preferred_date, preferred_time: d.preferred_time, message: d.message,
-    status: "pending", notes: "", ip_hash: ip, created_at: t, updated_at: t,
-  });
+  await sql`insert into bookings (type, name, phone, email, topic, preferred_date, preferred_time, message, ip_hash)
+            values ('consultation', ${d.name}, ${d.phone}, ${d.email}, ${d.topic}, ${d.preferred_date}, ${d.preferred_time}, ${d.message}, ${ip})`;
   revalidatePath("/admin", "layout");
   return {
     ok: true,

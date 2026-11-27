@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { MongoClient } from "mongodb";
+import postgres from "postgres";
 
 /** Minimal .env loader for scripts (Next.js loads these files itself). */
 export function loadEnv() {
@@ -11,23 +11,32 @@ export function loadEnv() {
       process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
     }
   }
-  if (!process.env.MONGODB_URI) {
-    console.error("MONGODB_URI is not set (see .env.example).");
+  if (!process.env.DATABASE_URL) {
+    console.error(
+      process.env.VERCEL
+        ? "DATABASE_URL is not set. In Vercel open Project → Storage, connect a Neon database to this project " +
+          "(it adds DATABASE_URL for you), then redeploy."
+        : "DATABASE_URL is not set (see .env.example).",
+    );
     process.exit(1);
   }
 }
 
-/** Connects, runs `fn` with the database, then closes the connection. */
-export async function withDb(fn: (db: import("mongodb").Db) => Promise<void>) {
+/** A single connection for scripts. Prefers Neon's direct (unpooled) URL, which suits schema changes. */
+export function connect() {
   loadEnv();
-  const client = new MongoClient(process.env.MONGODB_URI!, { serverSelectionTimeoutMS: 15_000 });
+  return postgres(process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL!, { prepare: false, max: 1, onnotice: () => {} });
+}
+
+/** Runs `fn` with a connection, closes it, and exits non-zero on failure. */
+export async function run(fn: (sql: postgres.Sql) => Promise<void>) {
+  const sql = connect();
   try {
-    await client.connect();
-    await fn(client.db(process.env.MONGODB_DB || "wink"));
+    await fn(sql);
   } catch (e) {
     console.error(e);
     process.exitCode = 1;
   } finally {
-    await client.close();
+    await sql.end();
   }
 }

@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { Flash, Pill, Topbar } from "@/components/admin/ui";
-import { listAllPosts } from "@/lib/admin-data";
 import { requireUser } from "@/lib/auth";
 import { fmtDate, type Post } from "@/lib/content";
+import { sql } from "@/lib/db";
 
 export const metadata = { title: "Updates" };
 
@@ -10,7 +10,7 @@ export default async function Posts({ searchParams }: { searchParams: Promise<Re
   await requireUser();
   const [sp, rows] = await Promise.all([
     searchParams,
-    listAllPosts(),
+    sql<(Post & { author: string | null })[]>`select p.*, u.name as author from posts p left join users u on u.id = p.author_id order by coalesce(p.published_at, p.updated_at) desc`,
   ]);
   return (
     <>

@@ -1,11 +1,11 @@
 import { cache } from "react";
-import { db } from "./db";
+import { sql } from "./db";
 
 export type DayHours = { open: string; close: string; closed: boolean };
 
 export type SiteSettings = {
   banner: string;
-  hero: { title: string; accent: string; lead: string };
+  hero: { title: string; accent: string; lead: string; image: string };
   brand: { tagline: string; hashtag: string };
   about: { intro: string; vision: string; mission: string };
   contact: {
@@ -26,6 +26,7 @@ export const DEFAULT_SETTINGS: SiteSettings = {
   hero: {
     title: "Your Global Nursing Journey,",
     accent: "Made Simple.",
+    image: "",
     lead: "Reliable, transparent and stress-free support with MOH International Clearance, NMC Foreign Verification, NMC PIN Renewal, UK-NMC Registration, CBT and IELTS tuition, at home and in the diaspora.",
   },
   brand: { tagline: "Your Global Nursing Journey, Made Simple", hashtag: "#ReliablyConvenient" },
@@ -67,12 +68,14 @@ function merge<T>(base: T, over: unknown): T {
 
 /** Site-wide settings, read once per request. Missing fields fall back to defaults. */
 export const getSettings = cache(async (): Promise<SiteSettings> => {
-  const doc = await (await db()).settings.findOne({ _id: "site" });
-  return merge(DEFAULT_SETTINGS, doc?.value);
+  const rows = await sql<{ value: unknown }[]>`select value from settings where key = 'site'`;
+  return merge(DEFAULT_SETTINGS, rows[0]?.value);
 });
 
 export async function saveSettings(s: SiteSettings) {
-  await (await db()).settings.updateOne({ _id: "site" }, { $set: { value: s, updated_at: new Date() } }, { upsert: true });
+  await sql`
+    insert into settings (key, value, updated_at) values ('site', ${sql.json(s as never)}, now())
+    on conflict (key) do update set value = excluded.value, updated_at = now()`;
 }
 
 /* ---------- helpers ---------- */

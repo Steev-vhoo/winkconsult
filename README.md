@@ -18,57 +18,61 @@ The public website for WiNK CONSULT, plus a private dashboard where WiNK's staff
 | Part | Choice | Cost |
 | --- | --- | --- |
 | App | Next.js 15 (App Router, server actions), TypeScript | — |
-| Database | MongoDB Atlas (free M0 cluster, 512 MB) | Free |
+| Database | Postgres on Neon (free tier, via Vercel Storage) | Free |
+| Images | Vercel Blob (free tier) | Free |
 | Hosting | Vercel Hobby (free tier) | Free |
 | Email alerts | Resend (free tier: 3,000 emails/month) | Free |
 | Domain | e.g. `winkconsult.com` | ~$10–15 / year |
 
-There are no other paid services. Logins, sessions and spam protection are built into the app, so it needs nothing beyond MongoDB.
+There are no other paid services.
 
-![New enquiry email alert](docs/email-alert.png)
+![New enquiry email alert](docs/email-alert.png) Logins, sessions and spam protection are built into the app, so it runs on any Postgres database.
 
 ## Run it locally
 
-You need Node 20 or newer and a MongoDB database (a free Atlas cluster works fine for development too).
+You need Node 20 or newer and a Postgres database (local Postgres, or a free Neon database).
 
 ```bash
 npm install
-cp .env.example .env.local      # then fill in MONGODB_URI and APP_SECRET
-npm run db:setup                # create the indexes
-npm run db:seed                 # load WiNK's services, FAQs and settings
+cp .env.example .env.local      # then fill in DATABASE_URL and APP_SECRET
+npx tsx scripts/prepare-db.ts   # create tables and load WiNK's starting content
 ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='a-long-password' ADMIN_NAME='Your Name' npm run admin:create
 npm run dev                     # http://localhost:3000, admin at /admin
 ```
 
+Image uploads need `BLOB_READ_WRITE_TOKEN`. Copy it from the Blob store in Vercel; without it, the upload fields are switched off.
+
 ## Deploy to production (free tier)
 
-### 1. Database: MongoDB Atlas
+Everything is set up from the Vercel dashboard. You don't need to run any commands.
 
-1. Create a free account at [mongodb.com/atlas](https://www.mongodb.com/cloud/atlas) and create a **free (M0)** cluster. Pick the region closest to Ghana, such as **AWS London (eu-west-2)**.
-2. Under **Database Access**, add a database user with a long password and the **Read and write to any database** role.
-3. Under **Network Access**, allow access from anywhere (`0.0.0.0/0`). Vercel doesn't use fixed IP addresses, so this is required; the database user's password still protects the data.
-4. Choose **Connect → Drivers** and copy the connection string (`mongodb+srv://…`). Put your user's password into it. This is your `MONGODB_URI`. The app stores its data in a database called `wink` (change it with `MONGODB_DB`).
-5. On your computer, put that string in `.env.local` and run:
-   ```bash
-   npm run db:setup
-   npm run db:seed
-   ADMIN_EMAIL=… ADMIN_PASSWORD=… ADMIN_NAME=… npm run admin:create
-   ```
+### 1. Connect the database and image storage
 
-`db:setup` creates the indexes. These keep emails and web addresses unique, and they delete expired sessions and old sign-in attempts automatically. It's safe to run again at any time.
+In the Vercel project, open **Storage**:
 
-### 2. Hosting: Vercel
+1. **Create Database → Neon (Serverless Postgres)**. Pick the region closest to Ghana, such as **AWS Europe West 2 (London)**. Connect it to this project for **Production** and **Preview**. This adds `DATABASE_URL` and `DATABASE_URL_UNPOOLED` automatically.
+2. **Create → Blob**. Connect it to this project for **Production** and **Preview**. This adds `BLOB_READ_WRITE_TOKEN` automatically.
 
-1. In [vercel.com](https://vercel.com), choose **Add New → Project** and import the `winkconsult` GitHub repository.
-2. Add these environment variables:
-   - `MONGODB_URI`: the Atlas connection string
-   - `APP_SECRET`: a long random string; generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
-   - `SITE_URL`: e.g. `https://www.winkconsult.com` (used for the dashboard link in alert emails)
-   - `RESEND_API_KEY` and `EMAIL_FROM`: for email alerts (see below)
-   - Set each variable for **Production** and **Preview**. The build reads the database to pre-render pages, so `MONGODB_URI` must be set, and step 1 completed, **before** the first deploy. Otherwise the build fails with "MONGODB_URI is not set" or a connection timeout (check Network Access in Atlas).
-3. Deploy. The site runs in Vercel's London region (`lhr1`), close to both an Atlas cluster in London and visitors in Ghana. `vercel.json` also sets up a daily health check that pings the database.
+### 2. Environment variables
 
-### 3. Email alerts: Resend
+In **Settings → Environment Variables**, add these for **Production** and **Preview**:
+
+- `APP_SECRET`: a long random string; generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+- `SITE_URL`: e.g. `https://www.winkconsult.com` (used for links in alert emails and the sitemap)
+- `ADMIN_EMAIL`, `ADMIN_PASSWORD` (at least 10 characters) and `ADMIN_NAME`: the first admin account. It's created on the first deploy, and only if no accounts exist yet. After you've signed in and changed the password under **My password**, you can delete `ADMIN_PASSWORD`.
+- `RESEND_API_KEY` and `EMAIL_FROM`: for email alerts (see below)
+
+### 3. Deploy
+
+Deploy, or redeploy from **Deployments**. Every build first runs `scripts/prepare-db.ts`, which:
+
+- applies any new database migrations (`db/migrations/*.sql`)
+- loads WiNK's starting content (services, FAQs, settings) on the very first deploy only, so anything staff delete in the dashboard stays deleted
+- creates the first admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` if there are no accounts
+
+The site runs in Vercel's London region (`lhr1`), close to a London Neon database and to visitors in Ghana. Neon's free tier sleeps when idle and wakes automatically on the next visit, which adds a moment's delay to the first page load.
+
+### 4. Email alerts: Resend
 
 1. Create a free account at [resend.com](https://resend.com) and create an API key. Add it to Vercel as `RESEND_API_KEY`.
 2. Under **Domains**, add WiNK's domain and create the DNS records Resend lists. Then set `EMAIL_FROM` to an address on that domain, e.g. `WiNK Website <alerts@winkconsult.com>`.
@@ -77,7 +81,7 @@ npm run dev                     # http://localhost:3000, admin at /admin
 
 Each enquiry shows whether its alert was sent. If sending failed (for example during an outage), staff can press **Send alert** to try again. Email problems never stop a visitor's enquiry from being saved.
 
-### 4. Domain
+### 5. Domain
 
 Buy the domain from any registrar. In Vercel, open **Project → Settings → Domains**, add it, and follow the DNS instructions.
 
@@ -91,6 +95,7 @@ Buy the domain from any registrar. In Vercel, open **Project → Settings → Do
   - Use **Send confirmation on WhatsApp** to message the client a ready-written confirmation.
 - **Classes:** add a class with its start date, fee and number of seats. Untick **Show on website** to hide it, or set **Registration** to **Closed** to stop new bookings.
 - **Updates:** write a post and set it to **Published**. A future publish date schedules it. Changes appear on the site within about 5 minutes.
+- **Images:** upload a cover image for each update, and use **Insert image** in the editor to add photos inside the article. Under **Site settings → Home page**, upload the hero photo. Use JPG, PNG, WebP or GIF, up to 4 MB.
 - **Settings** (admins only): changing the WhatsApp number updates every WhatsApp button on the site. Opening hours control which consultation times people can choose.
 
 ## Security notes
@@ -104,9 +109,9 @@ Buy the domain from any registrar. In Vercel, open **Project → Settings → Do
 - Markdown is rendered without raw HTML, so content can't inject scripts.
 - CSV exports protect against formula injection in Excel and Google Sheets.
 - Admin pages send `noindex` and `no-store` headers.
+- Uploads are limited to signed-in staff and to JPG, PNG, WebP or GIF up to 4 MB. The server checks each file's actual contents, not just its name. SVG is refused because it can contain scripts. Replaced or deleted images are removed from storage.
 
 ## Not included yet
 
 - **Alerts for bookings, and SMS alerts.** Only new enquiries trigger an email. Bookings could use the same mechanism.
-- **Image uploads for posts.** Posts currently link to a cover image by URL; a storage service such as Cloudinary or Vercel Blob could add uploads later.
 - **Online payments.** Booking confirmations ask clients to pay by MoMo or bank transfer; Paystack could be added later.

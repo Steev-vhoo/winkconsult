@@ -35,10 +35,13 @@ export default async function Home() {
           </div>
           <div className="hero-visual" aria-hidden="true">
             <div className="hero-blob" />
-            <div className="photo-slot">
-              <div className="big">Ghana<br /><span>to the</span><br />world.</div>
-              <small>Photo from WiNK</small>
-            </div>
+            {s.hero.image ? (
+              <img className="hero-photo" src={s.hero.image} alt="" />
+            ) : (
+              <div className="photo-slot">
+                <div className="big">Ghana<br /><span>to the</span><br />world.</div>
+              </div>
+            )}
             <span className="plane"><Icon name="plane" /></span>
             {chips.map((c, i) => (
               <div key={c.id} className={`float-chip chip-${i + 1}`}>

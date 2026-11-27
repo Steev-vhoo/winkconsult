@@ -4,21 +4,23 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "tsx scripts/prepare-db.ts && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "db:setup": "tsx scripts/setup-db.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
-    "admin:create": "tsx scripts/create-admin.ts"
+    "admin:create": "tsx scripts/create-admin.ts",
+    "build:app": "next build"
   },
   "dependencies": {
+    "@vercel/blob": "2.8.2",
     "bcryptjs": "3.0.3",
-    "mongodb": "6.22.0",
     "next": "15.5.29",
+    "postgres": "3.4.9",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-markdown": "10.1.0",
-    "server-only": "0.0.1",
+    "server-only": "^0.0.1",
     "zod": "4.6.7"
   },
   "devDependencies": {

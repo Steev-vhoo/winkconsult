@@ -166,3 +166,8 @@ dl.kv dd { margin: 0; font-weight: 600; color: var(--navy); word-break: break-wo
   dl.kv { grid-template-columns: 1fr; gap: 2px 0; }
   dl.kv dd { margin-bottom: 8px; }
 }
+
+/* image fields */
+.thumb { display: block; max-width: 220px; max-height: 140px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); margin-bottom: 8px; }
+.f input[type=file] { font: inherit; font-size: .88rem; }
+.preview img { max-width: 100%; border-radius: 10px; }

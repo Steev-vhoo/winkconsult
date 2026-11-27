@@ -1,63 +1,47 @@
-import { type ClassDoc, db, type FaqDoc, type PostDoc, type ServiceDoc, withId } from "./db";
+import { sql } from "./db";
 
-export type Service = Omit<ServiceDoc, "_id"> & { id: string };
-export type Faq = Omit<FaqDoc, "_id"> & { id: string };
-export type Post = Omit<PostDoc, "_id"> & { id: string };
-export type ClassRow = Omit<ClassDoc, "_id"> & { id: string };
+export type Service = {
+  id: string; slug: string; title: string; icon: string; summary: string; body_md: string;
+  whatsapp_message: string; category: "core" | "partner"; tile_label: string; sort_order: number; published: boolean;
+};
+export type Faq = { id: string; category: string; question: string; answer_md: string; sort_order: number; published: boolean };
+export type Post = {
+  id: string; slug: string; title: string; excerpt: string; body_md: string; cover_url: string | null;
+  status: "draft" | "published"; published_at: Date | null; created_at: Date; updated_at: Date;
+};
+export type ClassRow = {
+  id: string; title: string; kind: string; description: string; start_date: string | null; schedule: string;
+  mode: "Online" | "In person" | "Hybrid"; location: string; capacity: number; price: string;
+  status: "open" | "closed"; published: boolean; taken: number;
+};
 
-export async function listServices(all = false): Promise<Service[]> {
-  const { services } = await db();
-  const docs = await services.find(all ? {} : { published: true }).sort({ category: 1, sort_order: 1, title: 1 }).toArray();
-  return docs.map(withId);
-}
+export const listServices = (all = false) =>
+  sql<Service[]>`select * from services where ${all} or published order by category, sort_order, title`;
 
-export async function getService(id: string): Promise<Service | undefined> {
-  const doc = await (await db()).services.findOne({ _id: id });
-  return doc ? withId(doc) : undefined;
-}
+export const getService = (id: string) => sql<Service[]>`select * from services where id = ${id}`.then((r) => r[0]);
 
-export async function listFaqs(all = false): Promise<Faq[]> {
-  const { faqs } = await db();
-  return (await faqs.find(all ? {} : { published: true }).sort({ sort_order: 1, category: 1, question: 1 }).toArray()).map(withId);
-}
+export const listFaqs = (all = false) =>
+  sql<Faq[]>`select * from faqs where ${all} or published order by sort_order, category, question`;
 
-export async function getFaq(id: string): Promise<Faq | undefined> {
-  const doc = await (await db()).faqs.findOne({ _id: id });
-  return doc ? withId(doc) : undefined;
-}
+export const listPublishedPosts = (limit = 50) => sql<Post[]>`
+  select * from posts where status = 'published' and published_at <= now()
+  order by published_at desc limit ${limit}`;
 
-export async function faqCategories(): Promise<string[]> {
-  return ((await (await db()).faqs.distinct("category")) as string[]).sort();
-}
+export const getPublishedPost = (slug: string) => sql<Post[]>`
+  select * from posts where slug = ${slug} and status = 'published' and published_at <= now()`.then((r) => r[0]);
 
-export async function listPublishedPosts(limit = 50): Promise<Post[]> {
-  const { posts } = await db();
-  const docs = await posts.find({ status: "published", published_at: { $lte: new Date() } }).sort({ published_at: -1 }).limit(limit).toArray();
-  return docs.map(withId);
-}
+/** Classes with the number of seats taken by pending/confirmed bookings. */
+export const listClasses = (opts: { publicOnly?: boolean } = {}) => sql<ClassRow[]>`
+  select c.*, to_char(c.start_date, 'YYYY-MM-DD') as start_date,
+         coalesce((select count(*)::int from bookings b where b.class_id = c.id and b.status in ('pending','confirmed')), 0) as taken
+  from classes c
+  where ${!opts.publicOnly} or (c.published and c.status = 'open' and (c.start_date is null or c.start_date >= current_date - 7))
+  order by c.start_date nulls last, c.title`;
 
-export async function getPublishedPost(slug: string): Promise<Post | undefined> {
-  const doc = await (await db()).posts.findOne({ slug, status: "published", published_at: { $lte: new Date() } });
-  return doc ? withId(doc) : undefined;
-}
-
-/** Classes; for the public site only published, open ones that haven't long started. */
-export async function listClasses(opts: { publicOnly?: boolean } = {}): Promise<ClassRow[]> {
-  const { classes } = await db();
-  const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
-  const filter = opts.publicOnly
-    ? { published: true, status: "open" as const, $or: [{ start_date: null }, { start_date: { $gte: weekAgo } }] }
-    : {};
-  const docs = await classes.find(filter).toArray();
-  // Dated classes first (soonest first), then undated; ties by title.
-  docs.sort((a, b) => (a.start_date ?? "9999") .localeCompare(b.start_date ?? "9999") || a.title.localeCompare(b.title));
-  return docs.map(withId);
-}
-
-export async function getClass(id: string): Promise<ClassRow | undefined> {
-  const doc = await (await db()).classes.findOne({ _id: id });
-  return doc ? withId(doc) : undefined;
-}
+export const getClass = (id: string) => sql<ClassRow[]>`
+  select c.*, to_char(c.start_date, 'YYYY-MM-DD') as start_date,
+         coalesce((select count(*)::int from bookings b where b.class_id = c.id and b.status in ('pending','confirmed')), 0) as taken
+  from classes c where c.id = ${id}`.then((r) => r[0]);
 
 export function slugify(s: string) {
   return s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "")

@@ -4,6 +4,7 @@ import { ConfirmButton } from "@/components/admin/ConfirmButton";
 import { MarkdownEditor } from "@/components/admin/MarkdownEditor";
 import { Flash, Topbar } from "@/components/admin/ui";
 import { requireUser } from "@/lib/auth";
+import { storageConfigured } from "@/lib/storage";
 import { getService, type Service } from "@/lib/content";
 import { ICON_NAMES } from "@/lib/icons";
 import { deleteService, saveService } from "../../../actions";
@@ -30,7 +31,7 @@ export default async function EditService({ params, searchParams }: { params: Pr
           <div><label htmlFor="slug">Web address</label><input id="slug" name="slug" type="text" defaultValue={s.slug} placeholder="filled in from the name" /><p className="hint">Used for links like /services#moh-clearance.</p></div>
         </div>
         <div><label htmlFor="summary">Short summary</label><textarea id="summary" name="summary" defaultValue={s.summary} style={{ minHeight: 70 }} /></div>
-        <MarkdownEditor name="body_md" label="Full description" defaultValue={s.body_md ?? ""} rows={12} />
+        <MarkdownEditor name="body_md" label="Full description" defaultValue={s.body_md ?? ""} rows={12} uploads={storageConfigured()} />
         <div><label htmlFor="whatsapp_message">WhatsApp message</label><input id="whatsapp_message" name="whatsapp_message" type="text" defaultValue={s.whatsapp_message} placeholder="Hello WiNK CONSULT, I'd like help with…" /><p className="hint">Pre-filled when someone taps “Enquire on WhatsApp”.</p></div>
         <div className="row3">
           <div><label htmlFor="icon">Icon</label><select id="icon" name="icon" defaultValue={s.icon}>{ICON_NAMES.map((n) => <option key={n}>{n}</option>)}</select></div>

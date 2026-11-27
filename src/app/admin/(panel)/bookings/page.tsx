@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { AutoSubmitSelect } from "@/components/admin/ConfirmButton";
 import { Flash, fmtDateTime, StatusTabs, Topbar, WaClient } from "@/components/admin/ui";
-import { listBookings } from "@/lib/admin-data";
 import { requireUser } from "@/lib/auth";
 import { fmtDate } from "@/lib/content";
+import { sql } from "@/lib/db";
 import { fmtTime } from "@/lib/settings";
 import { setBookingStatus } from "../../actions";
 
@@ -22,7 +22,20 @@ export default async function Bookings({ searchParams }: { searchParams: Promise
   const type = sp.type === "class" || sp.type === "consultation" ? sp.type : "";
   const classId = /^[0-9a-f-]{36}$/i.test(sp.class ?? "") ? sp.class! : "";
 
-  const { rows, counts, classes } = await listBookings(status, type, classId);
+  const [rows, counts, classes] = await Promise.all([
+    sql<Row[]>`
+      select b.id, b.type, b.name, b.phone, b.email, b.status, b.topic, c.title,
+             to_char(b.preferred_date,'YYYY-MM-DD') as preferred_date, b.preferred_time, b.created_at
+      from bookings b left join classes c on c.id = b.class_id
+      where (${status} = 'all' or (${status} = 'active' and b.status in ('pending','confirmed')) or b.status = ${status})
+        and (${type} = '' or b.type = ${type})
+        and (${classId} = '' or b.class_id::text = ${classId})
+      order by case when b.type = 'consultation' and b.preferred_date >= current_date then 0 else 1 end,
+               b.preferred_date nulls last, b.created_at desc
+      limit 300`,
+    sql<{ status: string; n: number }[]>`select status, count(*)::int as n from bookings group by status`,
+    sql<{ id: string; title: string }[]>`select id, title from classes order by start_date desc nulls last, title`,
+  ]);
   const c = Object.fromEntries(counts.map((r) => [r.status, r.n])) as Record<string, number>;
   const extra = `${type ? `&type=${type}` : ""}${classId ? `&class=${classId}` : ""}`;
 

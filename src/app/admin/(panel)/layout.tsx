@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { sidebarCounts } from "@/lib/admin-data";
 import { requireUser } from "@/lib/auth";
+import { sql } from "@/lib/db";
 import { logoutAction } from "../actions";
 import { SideLink } from "./SideLink";
 
@@ -8,7 +8,9 @@ export const dynamic = "force-dynamic";
 
 export default async function PanelLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
-  const c = await sidebarCounts();
+  const [c] = await sql<{ enq: number; book: number }[]>`
+    select (select count(*)::int from enquiries where status = 'new') as enq,
+           (select count(*)::int from bookings where status = 'pending') as book`;
   const admin = user.role === "admin";
   return (
     <div className="shell">

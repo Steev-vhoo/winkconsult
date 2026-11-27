@@ -1,15 +1,32 @@
 import Link from "next/link";
 import { fmtDateTime, Pill, Topbar } from "@/components/admin/ui";
-import { dashboardData } from "@/lib/admin-data";
 import { requireUser } from "@/lib/auth";
 import { fmtDate } from "@/lib/content";
+import { sql } from "@/lib/db";
 
 export const metadata = { title: "Dashboard" };
 
 export default async function Dashboard({ searchParams }: { searchParams: Promise<{ denied?: string }> }) {
   const user = await requireUser();
   const sp = await searchParams;
-  const { stats, enquiries, bookings, classes } = await dashboardData();
+  const [[stats], enquiries, bookings, classes] = await Promise.all([
+    sql<{ new_enq: number; week_enq: number; pending: number; upcoming: number; posts: number }[]>`
+      select (select count(*)::int from enquiries where status = 'new') as new_enq,
+             (select count(*)::int from enquiries where created_at > now() - interval '7 days') as week_enq,
+             (select count(*)::int from bookings where status = 'pending') as pending,
+             (select count(*)::int from bookings where type = 'consultation' and status = 'confirmed' and preferred_date >= current_date) as upcoming,
+             (select count(*)::int from posts where status = 'published') as posts`,
+    sql<{ id: string; name: string; service: string; status: string; created_at: Date }[]>`
+      select id, name, service, status, created_at from enquiries where status in ('new','in_progress') order by created_at desc limit 6`,
+    sql<{ id: string; name: string; type: string; status: string; title: string | null; preferred_date: string | null; preferred_time: string; created_at: Date }[]>`
+      select b.id, b.name, b.type, b.status, c.title, to_char(b.preferred_date,'YYYY-MM-DD') as preferred_date, b.preferred_time, b.created_at
+      from bookings b left join classes c on c.id = b.class_id
+      where b.status in ('pending','confirmed') order by b.created_at desc limit 6`,
+    sql<{ id: string; title: string; start_date: string | null; capacity: number; taken: number; status: string }[]>`
+      select c.id, c.title, to_char(c.start_date,'YYYY-MM-DD') as start_date, c.capacity, c.status,
+        (select count(*)::int from bookings b where b.class_id = c.id and b.status in ('pending','confirmed')) as taken
+      from classes c where c.status = 'open' order by c.start_date nulls last limit 5`,
+  ]);
 
   return (
     <>

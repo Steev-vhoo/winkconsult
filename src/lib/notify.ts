@@ -1,5 +1,5 @@
 import "server-only";
-import { db } from "./db";
+import { sql } from "./db";
 import { escapeHtml, isEmail, sendEmail, type SendResult } from "./email";
 import { digits, getSettings } from "./settings";
 
@@ -67,17 +67,15 @@ export function enquiryEmail(e: Enquiry) {
 
 /** Emails staff about one enquiry and records the outcome. Safe to call more than once. */
 export async function notifyNewEnquiry(id: string, opts: { force?: boolean } = {}): Promise<SendResult> {
-  const { enquiries } = await db();
-  const doc = await enquiries.findOne({ _id: id });
-  if (!doc) return { ok: false, error: "Enquiry not found." };
-  const e: Enquiry = { ...doc, id: doc._id };
+  const [e] = await sql<Enquiry[]>`select id, name, phone, email, location, service, message, created_at, notified_at from enquiries where id = ${id}`;
+  if (!e) return { ok: false, error: "Enquiry not found." };
   if (e.notified_at && !opts.force) return { ok: true, id: "already-sent" };
 
   const result = await sendEmail({ to: await alertRecipients(), ...enquiryEmail(e) });
   if (result.ok) {
-    await enquiries.updateOne({ _id: id }, { $set: { notified_at: new Date(), notify_error: "" } });
+    await sql`update enquiries set notified_at = now(), notify_error = '' where id = ${id}`;
   } else {
-    await enquiries.updateOne({ _id: id }, { $set: { notify_error: result.error } });
+    await sql`update enquiries set notify_error = ${result.error} where id = ${id}`;
     console.error(`[enquiry-alert] ${id}: ${result.error}`);
   }
   return result;

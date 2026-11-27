@@ -2,9 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ConfirmButton } from "@/components/admin/ConfirmButton";
 import { Flash, fmtDateTime, Pill, Topbar, WaClient } from "@/components/admin/ui";
-import { getBooking } from "@/lib/admin-data";
 import { requireUser } from "@/lib/auth";
 import { fmtDate } from "@/lib/content";
+import { sql } from "@/lib/db";
 import { fmtTime } from "@/lib/settings";
 import { deleteBooking, updateBooking } from "../../../actions";
 
@@ -14,7 +14,11 @@ export default async function BookingDetail({ params, searchParams }: { params: 
   const user = await requireUser();
   const [{ id }, sp] = await Promise.all([params, searchParams]);
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
-  const b = await getBooking(id);
+  const [b] = await sql<{ id: string; type: string; class_id: string | null; title: string | null; schedule: string | null; class_start: string | null;
+    name: string; phone: string; email: string; topic: string; preferred_date: string | null; preferred_time: string; message: string;
+    status: string; notes: string; created_at: Date }[]>`
+    select b.*, to_char(b.preferred_date,'YYYY-MM-DD') as preferred_date, c.title, c.schedule, to_char(c.start_date,'YYYY-MM-DD') as class_start
+    from bookings b left join classes c on c.id = b.class_id where b.id = ${id}`;
   if (!b) notFound();
 
   const what = b.type === "class" ? b.title ?? "Class (deleted)" : `Consultation: ${b.topic}`;

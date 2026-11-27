@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  experimental: {
+    // Room for image uploads (4 MB max, checked in src/lib/storage.ts) sent through server actions.
+    serverActions: { bodySizeLimit: "5mb" },
+  },
   async headers() {
     return [
       {

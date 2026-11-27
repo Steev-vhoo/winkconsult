@@ -2,6 +2,7 @@ import { Flash, Topbar } from "@/components/admin/ui";
 import { requireUser } from "@/lib/auth";
 import { type DayHours, getSettings } from "@/lib/settings";
 import { emailConfigured } from "@/lib/email";
+import { MAX_IMAGE_MB, storageConfigured } from "@/lib/storage";
 import { saveSettingsAction, sendTestAlert } from "../../actions";
 
 export const metadata = { title: "Site settings" };
@@ -24,7 +25,7 @@ export default async function Settings({ searchParams }: { searchParams: Promise
   return (
     <>
       <Topbar title="Site settings" sub="Contact details, opening hours and the main text across the website." />
-      <Flash sp={sp} messages={{ email: `“${sp.bad ?? ""}” isn't a valid email address. Nothing was saved.` }} />
+      <Flash sp={sp} messages={{ email: `“${sp.bad ?? ""}” isn't a valid email address. Nothing was saved.`, upload: `The photo wasn't uploaded: ${sp.msg ?? ""} Nothing was saved.` }} />
       <form className="f" action={saveSettingsAction}>
         <fieldset className="box f">
           <legend>Contact details</legend>
@@ -80,6 +81,17 @@ export default async function Settings({ searchParams }: { searchParams: Promise
             <div><label htmlFor="hero_accent">Headline (green part)</label><input id="hero_accent" name="hero_accent" type="text" defaultValue={s.hero.accent} /></div>
           </div>
           <div><label htmlFor="hero_lead">Intro paragraph</label><textarea id="hero_lead" name="hero_lead" defaultValue={s.hero.lead} style={{ minHeight: 80 }} /></div>
+          <div>
+            <label htmlFor="hero_file">Hero photo</label>
+            {s.hero.image && <img src={s.hero.image} alt="Current hero photo" className="thumb" />}
+            <input id="hero_file" name="hero_file" type="file" accept="image/jpeg,image/png,image/webp" disabled={!storageConfigured()} />
+            <p className="hint">
+              {storageConfigured()
+                ? `A portrait photo works best, such as a smiling nurse at least 900 px tall. JPG, PNG or WebP, up to ${MAX_IMAGE_MB} MB.`
+                : "Uploads need a Vercel Blob store (see README)."}
+            </p>
+            {s.hero.image && <label className="check" style={{ marginTop: 6 }}><input type="checkbox" name="remove_hero_image" /> Remove photo (show the “Ghana to the world” graphic instead)</label>}
+          </div>
           <div><label htmlFor="destinations">Popular destinations</label><textarea id="destinations" name="destinations" defaultValue={s.destinations.join("\n")} style={{ minHeight: 120 }} /><p className="hint">One country per line. Leave empty to hide the section.</p></div>
           <div><label htmlFor="banner">Notice bar at the top of every page</label><input id="banner" name="banner" type="text" defaultValue={s.banner} placeholder="e.g. Closed on 25 December. Happy holidays!" /><p className="hint">Leave empty to hide it.</p></div>
         </fieldset>

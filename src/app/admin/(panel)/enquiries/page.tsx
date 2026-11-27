@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { AutoSubmitSelect } from "@/components/admin/ConfirmButton";
 import { Flash, fmtDateTime, StatusTabs, Topbar, WaClient } from "@/components/admin/ui";
-import { listEnquiries } from "@/lib/admin-data";
 import { requireUser } from "@/lib/auth";
+import { sql } from "@/lib/db";
 import { setEnquiryStatus } from "../../actions";
 
 export const metadata = { title: "Enquiries" };
@@ -16,7 +16,16 @@ export default async function Enquiries({ searchParams }: { searchParams: Promis
   const sp = await searchParams;
   const status = STATUSES.includes(sp.status as never) ? sp.status! : sp.status === "all" ? "all" : "open";
   const q = (sp.q ?? "").trim().slice(0, 100);
-  const { rows, counts } = await listEnquiries(status, q);
+  const like = `%${q.replace(/[%_\\]/g, "\\$&")}%`;
+
+  const [rows, counts] = await Promise.all([
+    sql<Row[]>`
+      select id, name, phone, email, location, service, message, status, created_at from enquiries
+      where (${status} = 'all' or (${status} = 'open' and status in ('new','in_progress')) or status = ${status})
+        and (${q} = '' or name ilike ${like} or phone ilike ${like} or email ilike ${like} or message ilike ${like} or service ilike ${like})
+      order by created_at desc limit 200`,
+    sql<{ status: string; n: number }[]>`select status, count(*)::int as n from enquiries group by status`,
+  ]);
   const c = Object.fromEntries(counts.map((r) => [r.status, r.n])) as Record<string, number>;
   const extra = q ? `&q=${encodeURIComponent(q)}` : "";
 

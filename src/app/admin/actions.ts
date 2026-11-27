@@ -5,12 +5,12 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { destroySession, hashPassword, login, requireUser } from "@/lib/auth";
 import { slugify } from "@/lib/content";
-import { removeBooking, removeClass, updateBookingStatus } from "@/lib/bookings";
-import { db, isDuplicateKey, newId } from "@/lib/db";
+import { sql } from "@/lib/db";
 import { ICON_NAMES } from "@/lib/icons";
 import { isEmail } from "@/lib/email";
 import { notifyNewEnquiry } from "@/lib/notify";
 import { getSettings, saveSettings, type SiteSettings } from "@/lib/settings";
+import { deleteImage, hasFile, uploadImage, type UploadResult } from "@/lib/storage";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 const bool = (f: FormData, k: string) => f.get(k) === "on" || f.get(k) === "true";
@@ -40,10 +40,9 @@ export async function changePasswordAction(_: { ok?: boolean; error?: string } |
   if (next.length < 10) return { error: "New password must be at least 10 characters." };
   if (next !== String(form.get("confirm") ?? "")) return { error: "The new passwords don't match." };
   const bcrypt = (await import("bcryptjs")).default;
-  const { users } = await db();
-  const row = await users.findOne({ _id: user.id });
+  const [row] = await sql<{ password_hash: string }[]>`select password_hash from users where id = ${user.id}`;
   if (!row || !(await bcrypt.compare(current, row.password_hash))) return { error: "Your current password is incorrect." };
-  await users.updateOne({ _id: user.id }, { $set: { password_hash: await hashPassword(next) } });
+  await sql`update users set password_hash = ${await hashPassword(next)} where id = ${user.id}`;
   return { ok: true };
 }
 
@@ -56,7 +55,7 @@ export async function updateEnquiry(form: FormData) {
   const id = uuid.parse(str(form, "id"));
   const status = ENQ_STATUS.parse(str(form, "status"));
   const notes = str(form, "notes").slice(0, 5000);
-  await (await db()).enquiries.updateOne({ _id: id }, { $set: { status, notes, updated_at: new Date() } });
+  await sql`update enquiries set status = ${status}, notes = ${notes}, updated_at = now() where id = ${id}`;
   revalidatePath("/admin", "layout");
   redirect(`/admin/enquiries/${id}?saved=1`);
 }
@@ -65,13 +64,13 @@ export async function setEnquiryStatus(form: FormData) {
   await requireUser();
   const id = uuid.parse(str(form, "id"));
   const status = ENQ_STATUS.parse(str(form, "status"));
-  await (await db()).enquiries.updateOne({ _id: id }, { $set: { status, updated_at: new Date() } });
+  await sql`update enquiries set status = ${status}, updated_at = now() where id = ${id}`;
   revalidatePath("/admin", "layout");
 }
 
 export async function deleteEnquiry(form: FormData) {
   await requireUser("admin");
-  await (await db()).enquiries.deleteOne({ _id: uuid.parse(str(form, "id")) });
+  await sql`delete from enquiries where id = ${uuid.parse(str(form, "id"))}`;
   revalidatePath("/admin", "layout");
   redirect("/admin/enquiries?deleted=1");
 }
@@ -85,20 +84,20 @@ export async function updateBooking(form: FormData) {
   const id = uuid.parse(str(form, "id"));
   const status = BOOK_STATUS.parse(str(form, "status"));
   const notes = str(form, "notes").slice(0, 5000);
-  await updateBookingStatus(id, status, notes);
+  await sql`update bookings set status = ${status}, notes = ${notes}, updated_at = now() where id = ${id}`;
   revalidatePath("/", "layout");
   redirect(`/admin/bookings/${id}?saved=1`);
 }
 
 export async function setBookingStatus(form: FormData) {
   await requireUser();
-  await updateBookingStatus(uuid.parse(str(form, "id")), BOOK_STATUS.parse(str(form, "status")));
+  await sql`update bookings set status = ${BOOK_STATUS.parse(str(form, "status"))}, updated_at = now() where id = ${uuid.parse(str(form, "id"))}`;
   revalidatePath("/", "layout");
 }
 
 export async function deleteBooking(form: FormData) {
   await requireUser("admin");
-  await removeBooking(uuid.parse(str(form, "id")));
+  await sql`delete from bookings where id = ${uuid.parse(str(form, "id"))}`;
   revalidatePath("/", "layout");
   redirect("/admin/bookings?deleted=1");
 }
@@ -124,14 +123,13 @@ export async function saveClass(form: FormData) {
   const d = classSchema.parse(Object.fromEntries(Object.keys(classSchema.shape).map((k) => [k, str(form, k)])));
   const published = bool(form, "published");
   const start = d.start_date || null;
-  const { classes, bookings } = await db();
-  const fields = { ...d, start_date: start, published, updated_at: new Date() };
   if (id) {
-    await classes.updateOne({ _id: uuid.parse(id) }, { $set: fields });
-    // Keep the title shown on existing bookings in step with the class name.
-    await bookings.updateMany({ class_id: id }, { $set: { class_title: d.title } });
+    await sql`update classes set title=${d.title}, kind=${d.kind}, description=${d.description}, start_date=${start}, schedule=${d.schedule},
+      mode=${d.mode}, location=${d.location}, capacity=${d.capacity}, price=${d.price}, status=${d.status}, published=${published}, updated_at=now()
+      where id = ${uuid.parse(id)}`;
   } else {
-    await classes.insertOne({ _id: newId(), ...fields, taken: 0, created_at: new Date() });
+    await sql`insert into classes (title, kind, description, start_date, schedule, mode, location, capacity, price, status, published)
+      values (${d.title}, ${d.kind}, ${d.description}, ${start}, ${d.schedule}, ${d.mode}, ${d.location}, ${d.capacity}, ${d.price}, ${d.status}, ${published})`;
   }
   refreshSite();
   redirect("/admin/classes?saved=1");
@@ -139,7 +137,7 @@ export async function saveClass(form: FormData) {
 
 export async function deleteClass(form: FormData) {
   await requireUser("admin");
-  await removeClass(uuid.parse(str(form, "id")));
+  await sql`delete from classes where id = ${uuid.parse(str(form, "id"))}`;
   refreshSite();
   redirect("/admin/classes?deleted=1");
 }
@@ -159,15 +157,15 @@ export async function saveService(form: FormData) {
     order: z.coerce.number().int().catch(0).parse(str(form, "sort_order")), published: bool(form, "published"),
   };
   try {
-    const { services } = await db();
-    const fields = {
-      slug, title, icon, category, summary: v.summary, body_md: v.body, whatsapp_message: v.wa,
-      tile_label: v.tile, sort_order: v.order, published: v.published, updated_at: new Date(),
-    };
-    if (id) await services.updateOne({ _id: uuid.parse(id) }, { $set: fields });
-    else await services.insertOne({ _id: newId(), ...fields });
+    if (id) {
+      await sql`update services set slug=${slug}, title=${title}, icon=${icon}, summary=${v.summary}, body_md=${v.body}, whatsapp_message=${v.wa},
+        category=${category}, tile_label=${v.tile}, sort_order=${v.order}, published=${v.published}, updated_at=now() where id=${uuid.parse(id)}`;
+    } else {
+      await sql`insert into services (slug, title, icon, summary, body_md, whatsapp_message, category, tile_label, sort_order, published)
+        values (${slug}, ${title}, ${icon}, ${v.summary}, ${v.body}, ${v.wa}, ${category}, ${v.tile}, ${v.order}, ${v.published})`;
+    }
   } catch (e) {
-    if (isDuplicateKey(e)) redirect(`/admin/services/${id || "new"}?error=slug`);
+    if ((e as { code?: string }).code === "23505") redirect(`/admin/services/${id || "new"}?error=slug`);
     throw e;
   }
   refreshSite();
@@ -176,7 +174,7 @@ export async function saveService(form: FormData) {
 
 export async function deleteService(form: FormData) {
   await requireUser("admin");
-  await (await db()).services.deleteOne({ _id: uuid.parse(str(form, "id")) });
+  await sql`delete from services where id = ${uuid.parse(str(form, "id"))}`;
   refreshSite();
   redirect("/admin/services?deleted=1");
 }
@@ -191,17 +189,18 @@ export async function saveFaq(form: FormData) {
   const answer = z.string().min(1).max(10000).parse(str(form, "answer_md"));
   const order = z.coerce.number().int().catch(0).parse(str(form, "sort_order"));
   const published = bool(form, "published");
-  const { faqs } = await db();
-  const fields = { category, question, answer_md: answer, sort_order: order, published, updated_at: new Date() };
-  if (id) await faqs.updateOne({ _id: uuid.parse(id) }, { $set: fields });
-  else await faqs.insertOne({ _id: newId(), ...fields });
+  if (id) {
+    await sql`update faqs set category=${category}, question=${question}, answer_md=${answer}, sort_order=${order}, published=${published}, updated_at=now() where id=${uuid.parse(id)}`;
+  } else {
+    await sql`insert into faqs (category, question, answer_md, sort_order, published) values (${category}, ${question}, ${answer}, ${order}, ${published})`;
+  }
   refreshSite();
   redirect("/admin/faqs?saved=1");
 }
 
 export async function deleteFaq(form: FormData) {
   await requireUser("admin");
-  await (await db()).faqs.deleteOne({ _id: uuid.parse(str(form, "id")) });
+  await sql`delete from faqs where id = ${uuid.parse(str(form, "id"))}`;
   refreshSite();
   redirect("/admin/faqs?deleted=1");
 }
@@ -215,34 +214,45 @@ export async function savePost(form: FormData) {
   const slug = slugify(str(form, "slug") || title);
   const status = z.enum(["draft", "published"]).parse(str(form, "status"));
   const cover = str(form, "cover_url");
-  const coverUrl = cover ? z.string().url().refine((u) => /^https:\/\//.test(u) || u.startsWith("/"), "Use an https:// link").parse(cover) : null;
+  let coverUrl = cover ? z.string().url().refine((u) => /^https:\/\//.test(u) || u.startsWith("/"), "Use an https:// link").parse(cover) : null;
+  if (bool(form, "remove_cover")) coverUrl = null;
+  const oldCover = id ? (await sql<{ cover_url: string | null }[]>`select cover_url from posts where id = ${uuid.parse(id)}`)[0]?.cover_url ?? null : null;
+  // A failed upload never loses the article: save everything else and report the problem.
+  let uploadError = "";
+  const coverFile = form.get("cover_file");
+  if (hasFile(coverFile)) {
+    const up = await uploadImage(coverFile, "posts");
+    if (up.ok) coverUrl = up.url;
+    else uploadError = up.error;
+  }
   const excerpt = str(form, "excerpt").slice(0, 400);
   const body = str(form, "body_md").slice(0, 100000);
   const dateRaw = str(form, "published_at");
   const publishedAt = status === "published" ? (dateRaw ? new Date(`${dateRaw}T08:00:00Z`) : new Date()) : null;
-  const postId = id ? uuid.parse(id) : newId();
+  let newId = id;
   try {
-    const { posts } = await db();
-    const fields = { title, slug, status, cover_url: coverUrl, excerpt, body_md: body, updated_at: new Date() };
     if (id) {
-      const existing = await posts.findOne({ _id: postId }, { projection: { published_at: 1 } });
-      // Publishing keeps the original date unless a new one is chosen; drafts keep theirs for later.
-      const published_at = status === "published" ? (dateRaw ? publishedAt : existing?.published_at ?? new Date()) : existing?.published_at ?? null;
-      await posts.updateOne({ _id: postId }, { $set: { ...fields, published_at } });
+      await sql`update posts set title=${title}, slug=${slug}, status=${status}, cover_url=${coverUrl}, excerpt=${excerpt}, body_md=${body},
+        published_at = case when ${status}::text = 'published' then coalesce(${dateRaw ? publishedAt : null}::timestamptz, published_at, now()) else published_at end,
+        updated_at=now() where id=${uuid.parse(id)}`;
     } else {
-      await posts.insertOne({ _id: postId, ...fields, published_at: publishedAt, author_id: user.id, created_at: new Date() });
+      const [row] = await sql<{ id: string }[]>`insert into posts (title, slug, status, cover_url, excerpt, body_md, published_at, author_id)
+        values (${title}, ${slug}, ${status}, ${coverUrl}, ${excerpt}, ${body}, ${publishedAt}, ${user.id}) returning id`;
+      newId = row.id;
     }
   } catch (e) {
-    if (isDuplicateKey(e)) redirect(`/admin/posts/${id || "new"}?error=slug`);
+    if ((e as { code?: string }).code === "23505") redirect(`/admin/posts/${id || "new"}?error=slug`);
     throw e;
   }
+  if (oldCover && oldCover !== coverUrl) await deleteImage(oldCover);
   refreshSite();
-  redirect(`/admin/posts/${postId}?saved=1`);
+  redirect(`/admin/posts/${newId}?${uploadError ? `error=upload&msg=${encodeURIComponent(uploadError)}` : "saved=1"}`);
 }
 
 export async function deletePost(form: FormData) {
   await requireUser();
-  await (await db()).posts.deleteOne({ _id: uuid.parse(str(form, "id")) });
+  const [gone] = await sql<{ cover_url: string | null }[]>`delete from posts where id = ${uuid.parse(str(form, "id"))} returning cover_url`;
+  await deleteImage(gone?.cover_url);
   refreshSite();
   redirect("/admin/posts?deleted=1");
 }
@@ -258,7 +268,10 @@ export async function saveSettingsAction(form: FormData) {
   const group = str(form, "whatsappGroup");
   const next: SiteSettings = {
     banner: str(form, "banner").slice(0, 200),
-    hero: { title: str(form, "hero_title") || cur.hero.title, accent: str(form, "hero_accent"), lead: str(form, "hero_lead").slice(0, 600) },
+    hero: {
+      title: str(form, "hero_title") || cur.hero.title, accent: str(form, "hero_accent"), lead: str(form, "hero_lead").slice(0, 600),
+      image: bool(form, "remove_hero_image") ? "" : cur.hero.image,
+    },
     brand: { tagline: str(form, "tagline"), hashtag: str(form, "hashtag") },
     about: { intro: str(form, "about_intro").slice(0, 1000), vision: str(form, "vision").slice(0, 1000), mission: str(form, "mission").slice(0, 1500) },
     contact: {
@@ -277,9 +290,25 @@ export async function saveSettingsAction(form: FormData) {
   const bad = emails.find((x) => !isEmail(x));
   if (bad) redirect(`/admin/settings?error=email&bad=${encodeURIComponent(bad.slice(0, 80))}`);
   next.notify.emails = [...new Set(emails)].slice(0, 10);
+  const heroFile = form.get("hero_file");
+  if (hasFile(heroFile)) {
+    const up = await uploadImage(heroFile, "site");
+    if (!up.ok) redirect(`/admin/settings?error=upload&msg=${encodeURIComponent(up.error)}`);
+    next.hero.image = up.url;
+  }
   await saveSettings(next);
+  if (cur.hero.image && cur.hero.image !== next.hero.image) await deleteImage(cur.hero.image);
   refreshSite();
   redirect("/admin/settings?saved=1");
+}
+
+/* ---------- Images in the Markdown editor ---------- */
+
+export async function uploadEditorImage(form: FormData): Promise<UploadResult> {
+  await requireUser();
+  const file = form.get("file");
+  if (!hasFile(file)) return { ok: false, error: "Choose an image first." };
+  return uploadImage(file, "posts");
 }
 
 /* ---------- Email alerts ---------- */
@@ -320,12 +349,9 @@ export async function createUserAction(_: { ok?: boolean; error?: string; values
   if (!parsed.success) return { error: parsed.error.issues[0].message, values };
   const d = parsed.data;
   try {
-    await (await db()).users.insertOne({
-      _id: newId(), email: d.email, name: d.name, password_hash: await hashPassword(d.password), role: d.role,
-      active: true, created_at: new Date(), last_login_at: null,
-    });
+    await sql`insert into users (email, name, password_hash, role) values (${d.email}, ${d.name}, ${await hashPassword(d.password)}, ${d.role})`;
   } catch (e) {
-    if (isDuplicateKey(e)) return { error: "A user with that email already exists.", values };
+    if ((e as { code?: string }).code === "23505") return { error: "A user with that email already exists.", values };
     throw e;
   }
   revalidatePath("/admin/users");
@@ -337,19 +363,18 @@ export async function updateUserAction(form: FormData) {
   const id = uuid.parse(str(form, "id"));
   const op = str(form, "op");
   if (id === me.id && op !== "reset") redirect("/admin/users?error=self");
-  const { users, sessions } = await db();
   if (op === "deactivate") {
-    await users.updateOne({ _id: id }, { $set: { active: false } });
-    await sessions.deleteMany({ user_id: id });
+    await sql`update users set active = false where id = ${id}`;
+    await sql`delete from sessions where user_id = ${id}`;
   } else if (op === "activate") {
-    await users.updateOne({ _id: id }, { $set: { active: true } });
+    await sql`update users set active = true where id = ${id}`;
   } else if (op === "role") {
-    await users.updateOne({ _id: id }, { $set: { role: z.enum(["admin", "staff"]).parse(str(form, "role")) } });
+    await sql`update users set role = ${z.enum(["admin", "staff"]).parse(str(form, "role"))} where id = ${id}`;
   } else if (op === "reset") {
     const pw = z.string().min(10).safeParse(String(form.get("password") ?? ""));
     if (!pw.success) redirect("/admin/users?error=password");
-    await users.updateOne({ _id: id }, { $set: { password_hash: await hashPassword(pw.data) } });
-    if (id !== me.id) await sessions.deleteMany({ user_id: id }); // sign them out everywhere
+    await sql`update users set password_hash = ${await hashPassword(pw.data)} where id = ${id}`;
+    await sql`delete from sessions where user_id = ${id} and ${id !== me.id}`;
   }
   revalidatePath("/admin/users");
   redirect("/admin/users?saved=1");
