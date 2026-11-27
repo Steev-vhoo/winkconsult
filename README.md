@@ -64,7 +64,8 @@ The app connects as the database owner. The migration turns on row-level securit
    - `APP_SECRET`: a long random string; generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
    - `SITE_URL`: e.g. `https://www.winkconsult.com` (used for the dashboard link in alert emails)
    - `RESEND_API_KEY` and `EMAIL_FROM`: for email alerts (see below)
-3. Deploy. `vercel.json` sets up a daily health check. It keeps the free Supabase database from pausing, which happens after a week with no activity.
+   - Set each variable for **Production** and **Preview**. The build reads the database to pre-render pages, so `DATABASE_URL` must be set, and the migration from step 1 already run, **before** the first deploy. Otherwise the build fails with "DATABASE_URL is not set" or "relation does not exist".
+3. Deploy. The site runs in Vercel's London region (`lhr1`), close to both the Supabase database and visitors in Ghana. `vercel.json` sets up a daily health check. It keeps the free Supabase database from pausing, which happens after a week with no activity.
 
 ### 3. Email alerts: Resend
 
