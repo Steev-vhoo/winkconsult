@@ -5,6 +5,7 @@ The public website for WiNK CONSULT, plus a private dashboard where WiNK's staff
 - **Public site:** Home, About, Services, Classes & booking, Updates (blog), FAQ, Contact
 - **Admin dashboard** (`/admin`):
   - **Enquiries:** inbox for the contact form, with status, internal notes, a WhatsApp reply button and CSV export
+  - **Email alerts:** staff get an email for every new enquiry, with the message, a WhatsApp reply button and a link to the dashboard
   - **Bookings:** class seats and consultation requests; confirm, cancel or complete them, send a WhatsApp confirmation, export to CSV
   - **Classes:** create IELTS, CBT and other classes with dates, fee and seat limits; the site shows live seats left and stops taking bookings when a class is full
   - **Updates:** write and publish blog posts with a Markdown editor and preview, including scheduled publishing
@@ -19,9 +20,12 @@ The public website for WiNK CONSULT, plus a private dashboard where WiNK's staff
 | App | Next.js 15 (App Router, server actions), TypeScript | — |
 | Database | Postgres (Supabase free tier in production) | Free |
 | Hosting | Vercel Hobby (free tier) | Free |
+| Email alerts | Resend (free tier: 3,000 emails/month) | Free |
 | Domain | e.g. `winkconsult.com` | ~$10–15 / year |
 
-There are no other paid services. Logins, sessions and spam protection are built into the app, so it runs on any Postgres database.
+There are no other paid services.
+
+![New enquiry email alert](docs/email-alert.png) Logins, sessions and spam protection are built into the app, so it runs on any Postgres database.
 
 ## Run it locally
 
@@ -58,10 +62,20 @@ The app connects as the database owner. The migration turns on row-level securit
 2. Add these environment variables:
    - `DATABASE_URL`: the Supabase pooler URL
    - `APP_SECRET`: a long random string; generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
-   - `SITE_URL`: e.g. `https://www.winkconsult.com`
+   - `SITE_URL`: e.g. `https://www.winkconsult.com` (used for the dashboard link in alert emails)
+   - `RESEND_API_KEY` and `EMAIL_FROM`: for email alerts (see below)
 3. Deploy. `vercel.json` sets up a daily health check. It keeps the free Supabase database from pausing, which happens after a week with no activity.
 
-### 3. Domain
+### 3. Email alerts: Resend
+
+1. Create a free account at [resend.com](https://resend.com) and create an API key. Add it to Vercel as `RESEND_API_KEY`.
+2. Under **Domains**, add WiNK's domain and create the DNS records Resend lists. Then set `EMAIL_FROM` to an address on that domain, e.g. `WiNK Website <alerts@winkconsult.com>`.
+   - Until a domain is verified, Resend only sends from `onboarding@resend.dev`, and only to the email address you signed up to Resend with. That's enough for a first test.
+3. Redeploy. Then, in the dashboard, open **Site settings → Email alerts**, enter the addresses that should get alerts (one per line), save, and press **Send a test email**.
+
+Each enquiry shows whether its alert was sent. If sending failed (for example during an outage), staff can press **Send alert** to try again. Email problems never stop a visitor's enquiry from being saved.
+
+### 4. Domain
 
 Buy the domain from any registrar. In Vercel, open **Project → Settings → Domains**, add it, and follow the DNS instructions.
 
@@ -91,6 +105,6 @@ Buy the domain from any registrar. In Vercel, open **Project → Settings → Do
 
 ## Not included yet
 
-- **Email or SMS alerts** for new enquiries. Staff currently check the dashboard; email alerts could be added later with a free service such as Resend.
+- **Alerts for bookings, and SMS alerts.** Only new enquiries trigger an email. Bookings could use the same mechanism.
 - **Image uploads for posts.** Posts currently link to a cover image by URL; Supabase Storage could add uploads later.
 - **Online payments.** Booking confirmations ask clients to pay by MoMo or bank transfer; Paystack could be added later.

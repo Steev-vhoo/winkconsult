@@ -7,6 +7,8 @@ import { destroySession, hashPassword, login, requireUser } from "@/lib/auth";
 import { slugify } from "@/lib/content";
 import { sql } from "@/lib/db";
 import { ICON_NAMES } from "@/lib/icons";
+import { isEmail } from "@/lib/email";
+import { notifyNewEnquiry } from "@/lib/notify";
 import { getSettings, saveSettings, type SiteSettings } from "@/lib/settings";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
@@ -266,10 +268,39 @@ export async function saveSettingsAction(form: FormData) {
     },
     hours: { weekdays: day("weekdays"), saturday: day("saturday"), sunday: day("sunday") },
     destinations: str(form, "destinations").split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 12),
+    notify: { emails: [] },
   };
+  const emails = str(form, "notify_emails").split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const bad = emails.find((x) => !isEmail(x));
+  if (bad) redirect(`/admin/settings?error=email&bad=${encodeURIComponent(bad.slice(0, 80))}`);
+  next.notify.emails = [...new Set(emails)].slice(0, 10);
   await saveSettings(next);
   refreshSite();
   redirect("/admin/settings?saved=1");
+}
+
+/* ---------- Email alerts ---------- */
+
+export async function sendTestAlert() {
+  await requireUser("admin");
+  const { alertRecipients } = await import("@/lib/notify");
+  const { sendEmail } = await import("@/lib/email");
+  const to = await alertRecipients();
+  const res = await sendEmail({
+    to,
+    subject: "Test alert from the WiNK CONSULT website",
+    text: "Email alerts are working. You'll get a message like this whenever someone sends an enquiry on the website.",
+    html: "<p style=\"font-family:Arial,sans-serif\">Email alerts are working. You'll get a message like this whenever someone sends an enquiry on the website.</p>",
+  });
+  redirect(res.ok ? `/admin/settings?test=sent&to=${encodeURIComponent(to.join(", "))}#alerts` : `/admin/settings?test=failed&msg=${encodeURIComponent(res.error)}#alerts`);
+}
+
+export async function resendEnquiryAlert(form: FormData) {
+  await requireUser();
+  const id = uuid.parse(str(form, "id"));
+  const res = await notifyNewEnquiry(id, { force: true });
+  revalidatePath(`/admin/enquiries/${id}`);
+  redirect(`/admin/enquiries/${id}?${res.ok ? "alert=sent" : "alert=failed"}`);
 }
 
 /* ---------- Users ---------- */

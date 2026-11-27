@@ -1,9 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { z } from "zod";
 import { getClass } from "@/lib/content";
 import { sql } from "@/lib/db";
+import { notifyNewEnquiry } from "@/lib/notify";
 import { ipHash } from "@/lib/security";
 import { getSettings, hoursFor, slotsFor, waLink } from "@/lib/settings";
 
@@ -46,9 +48,11 @@ export async function submitEnquiry(_: FormState, form: FormData): Promise<FormS
   const ip = await ipHash();
   if (await tooMany("enquiries", ip)) return { ok: false, message: "You've sent several messages already. Please chat with us on WhatsApp instead.", values };
 
-  await sql`insert into enquiries (name, phone, email, location, service, message, ip_hash)
-            values (${d.name}, ${d.phone}, ${d.email}, ${d.location}, ${d.service}, ${d.message}, ${ip})`;
+  const [{ id }] = await sql<{ id: string }[]>`insert into enquiries (name, phone, email, location, service, message, ip_hash)
+            values (${d.name}, ${d.phone}, ${d.email}, ${d.location}, ${d.service}, ${d.message}, ${ip}) returning id`;
   revalidatePath("/admin", "layout");
+  // Email staff after the response is sent, so the visitor never waits on (or sees) email problems.
+  after(() => notifyNewEnquiry(id).catch((err) => console.error("[enquiry-alert]", err)));
 
   const s = await getSettings();
   const text = [`Hello WiNK CONSULT, I just sent an enquiry on your website.`, `Name: ${d.name}`, d.service && `Service: ${d.service}`, d.message]

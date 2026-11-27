@@ -4,7 +4,7 @@ import { ConfirmButton } from "@/components/admin/ConfirmButton";
 import { Flash, fmtDateTime, Pill, Topbar, WaClient } from "@/components/admin/ui";
 import { requireUser } from "@/lib/auth";
 import { sql } from "@/lib/db";
-import { deleteEnquiry, updateEnquiry } from "../../../actions";
+import { deleteEnquiry, resendEnquiryAlert, updateEnquiry } from "../../../actions";
 
 export const metadata = { title: "Enquiry" };
 
@@ -12,7 +12,7 @@ export default async function EnquiryDetail({ params, searchParams }: { params: 
   const user = await requireUser();
   const [{ id }, sp] = await Promise.all([params, searchParams]);
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
-  const [e] = await sql<{ id: string; name: string; phone: string; email: string; location: string; service: string; message: string; status: string; notes: string; created_at: Date; updated_at: Date }[]>`
+  const [e] = await sql<{ id: string; name: string; phone: string; email: string; location: string; service: string; message: string; status: string; notes: string; created_at: Date; updated_at: Date; notified_at: Date | null; notify_error: string }[]>`
     select * from enquiries where id = ${id}`;
   if (!e) notFound();
 
@@ -24,6 +24,8 @@ export default async function EnquiryDetail({ params, searchParams }: { params: 
         {e.email && <a className="btn btn-ghost btn-sm" href={`mailto:${e.email}`}>Email</a>}
       </Topbar>
       <Flash sp={sp} />
+      {sp.alert === "sent" && <div className="flash ok">Email alert sent.</div>}
+      {sp.alert === "failed" && <div className="flash err">Email alert failed: {e.notify_error}</div>}
       <div className="detail">
         <section className="card">
           <h2>Details</h2>
@@ -34,6 +36,13 @@ export default async function EnquiryDetail({ params, searchParams }: { params: 
             <dt>Service</dt><dd>{e.service || "–"}</dd>
           </dl>
           <div className="msg">{e.message || "No message."}</div>
+          <form action={resendEnquiryAlert} className="actions" style={{ marginTop: 16, fontSize: ".86rem", color: "var(--muted)" }}>
+            <input type="hidden" name="id" value={e.id} />
+            <span>
+              {e.notified_at ? `Email alert sent ${fmtDateTime(e.notified_at)}.` : e.notify_error ? `Email alert not sent: ${e.notify_error}` : "Email alert pending."}
+            </span>
+            <button className="btn btn-ghost btn-sm">{e.notified_at ? "Send again" : "Send alert"}</button>
+          </form>
         </section>
         <section className="card" style={{ marginTop: 0 }}>
           <h2>Follow-up</h2>

@@ -18,6 +18,7 @@ export type SiteSettings = {
   };
   hours: { weekdays: DayHours; saturday: DayHours; sunday: DayHours };
   destinations: string[];
+  notify: { emails: string[] }; // staff who get an email for each new enquiry
 };
 
 export const DEFAULT_SETTINGS: SiteSettings = {
@@ -50,6 +51,7 @@ export const DEFAULT_SETTINGS: SiteSettings = {
     sunday: { open: "09:00", close: "16:00", closed: true },
   },
   destinations: ["United Kingdom", "United States", "Canada", "Australia", "Ireland"],
+  notify: { emails: [] },
 };
 
 function merge<T>(base: T, over: unknown): T {

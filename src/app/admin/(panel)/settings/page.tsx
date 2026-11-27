@@ -1,7 +1,8 @@
 import { Flash, Topbar } from "@/components/admin/ui";
 import { requireUser } from "@/lib/auth";
 import { type DayHours, getSettings } from "@/lib/settings";
-import { saveSettingsAction } from "../../actions";
+import { emailConfigured } from "@/lib/email";
+import { saveSettingsAction, sendTestAlert } from "../../actions";
 
 export const metadata = { title: "Site settings" };
 
@@ -18,10 +19,12 @@ function Day({ id, label, d }: { id: string; label: string; d: DayHours }) {
 export default async function Settings({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   await requireUser("admin");
   const [sp, s] = await Promise.all([searchParams, getSettings()]);
+  const configured = emailConfigured();
+  const fallback = !s.notify.emails.length && process.env.NOTIFY_TO;
   return (
     <>
       <Topbar title="Site settings" sub="Contact details, opening hours and the main text across the website." />
-      <Flash sp={sp} />
+      <Flash sp={sp} messages={{ email: `“${sp.bad ?? ""}” isn't a valid email address. Nothing was saved.` }} />
       <form className="f" action={saveSettingsAction}>
         <fieldset className="box f">
           <legend>Contact details</legend>
@@ -36,6 +39,29 @@ export default async function Settings({ searchParams }: { searchParams: Promise
           <div className="row2">
             <div><label htmlFor="whatsappGroup">WhatsApp group invite link</label><input id="whatsappGroup" name="whatsappGroup" type="url" defaultValue={s.contact.whatsappGroup} placeholder="https://chat.whatsapp.com/…" /></div>
             <div><label htmlFor="address">Office address (optional)</label><input id="address" name="address" type="text" defaultValue={s.contact.address} /></div>
+          </div>
+        </fieldset>
+
+        <fieldset className="box f" id="alerts" style={{ scrollMarginTop: 20 }}>
+          <legend>Email alerts for new enquiries</legend>
+          {sp.test === "sent" && <div className="flash ok" style={{ margin: 0 }}>Test email sent to {sp.to}. Check the inbox (and the spam folder).</div>}
+          {sp.test === "failed" && <div className="flash err" style={{ margin: 0 }}>Test email failed: {sp.msg}</div>}
+          {!configured && (
+            <div className="flash err" style={{ margin: 0 }}>
+              Email sending isn&apos;t switched on yet. Add <code>RESEND_API_KEY</code> (and <code>EMAIL_FROM</code>) in the hosting settings. See the README.
+            </div>
+          )}
+          <div>
+            <label htmlFor="notify_emails">Send an email to</label>
+            <textarea id="notify_emails" name="notify_emails" defaultValue={s.notify.emails.join("\n")} style={{ minHeight: 80 }} placeholder="winkconsult24@gmail.com" />
+            <p className="hint">
+              One address per line (up to 10). Everyone listed gets an email for each new enquiry, with the message and a WhatsApp reply button.
+              {fallback && ` Currently using the NOTIFY_TO fallback: ${process.env.NOTIFY_TO}.`}
+            </p>
+          </div>
+          <div className="actions">
+            <button className="btn btn-ghost btn-sm" formAction={sendTestAlert} formNoValidate disabled={!configured}>Send a test email</button>
+            <span className="hint" style={{ margin: 0 }}>Uses the saved addresses. Save first if you changed them.</span>
           </div>
         </fieldset>
 
