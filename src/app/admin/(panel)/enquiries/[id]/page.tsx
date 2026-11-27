@@ -2,8 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ConfirmButton } from "@/components/admin/ConfirmButton";
 import { Flash, fmtDateTime, Pill, Topbar, WaClient } from "@/components/admin/ui";
+import { getEnquiry } from "@/lib/admin-data";
 import { requireUser } from "@/lib/auth";
-import { sql } from "@/lib/db";
 import { deleteEnquiry, resendEnquiryAlert, updateEnquiry } from "../../../actions";
 
 export const metadata = { title: "Enquiry" };
@@ -12,8 +12,7 @@ export default async function EnquiryDetail({ params, searchParams }: { params: 
   const user = await requireUser();
   const [{ id }, sp] = await Promise.all([params, searchParams]);
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
-  const [e] = await sql<{ id: string; name: string; phone: string; email: string; location: string; service: string; message: string; status: string; notes: string; created_at: Date; updated_at: Date; notified_at: Date | null; notify_error: string }[]>`
-    select * from enquiries where id = ${id}`;
+  const e = await getEnquiry(id);
   if (!e) notFound();
 
   return (

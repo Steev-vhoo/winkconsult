@@ -5,7 +5,8 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { destroySession, hashPassword, login, requireUser } from "@/lib/auth";
 import { slugify } from "@/lib/content";
-import { sql } from "@/lib/db";
+import { removeBooking, removeClass, updateBookingStatus } from "@/lib/bookings";
+import { db, isDuplicateKey, newId } from "@/lib/db";
 import { ICON_NAMES } from "@/lib/icons";
 import { isEmail } from "@/lib/email";
 import { notifyNewEnquiry } from "@/lib/notify";
@@ -39,9 +40,10 @@ export async function changePasswordAction(_: { ok?: boolean; error?: string } |
   if (next.length < 10) return { error: "New password must be at least 10 characters." };
   if (next !== String(form.get("confirm") ?? "")) return { error: "The new passwords don't match." };
   const bcrypt = (await import("bcryptjs")).default;
-  const [row] = await sql<{ password_hash: string }[]>`select password_hash from users where id = ${user.id}`;
+  const { users } = await db();
+  const row = await users.findOne({ _id: user.id });
   if (!row || !(await bcrypt.compare(current, row.password_hash))) return { error: "Your current password is incorrect." };
-  await sql`update users set password_hash = ${await hashPassword(next)} where id = ${user.id}`;
+  await users.updateOne({ _id: user.id }, { $set: { password_hash: await hashPassword(next) } });
   return { ok: true };
 }
 
@@ -54,7 +56,7 @@ export async function updateEnquiry(form: FormData) {
   const id = uuid.parse(str(form, "id"));
   const status = ENQ_STATUS.parse(str(form, "status"));
   const notes = str(form, "notes").slice(0, 5000);
-  await sql`update enquiries set status = ${status}, notes = ${notes}, updated_at = now() where id = ${id}`;
+  await (await db()).enquiries.updateOne({ _id: id }, { $set: { status, notes, updated_at: new Date() } });
   revalidatePath("/admin", "layout");
   redirect(`/admin/enquiries/${id}?saved=1`);
 }
@@ -63,13 +65,13 @@ export async function setEnquiryStatus(form: FormData) {
   await requireUser();
   const id = uuid.parse(str(form, "id"));
   const status = ENQ_STATUS.parse(str(form, "status"));
-  await sql`update enquiries set status = ${status}, updated_at = now() where id = ${id}`;
+  await (await db()).enquiries.updateOne({ _id: id }, { $set: { status, updated_at: new Date() } });
   revalidatePath("/admin", "layout");
 }
 
 export async function deleteEnquiry(form: FormData) {
   await requireUser("admin");
-  await sql`delete from enquiries where id = ${uuid.parse(str(form, "id"))}`;
+  await (await db()).enquiries.deleteOne({ _id: uuid.parse(str(form, "id")) });
   revalidatePath("/admin", "layout");
   redirect("/admin/enquiries?deleted=1");
 }
@@ -83,20 +85,20 @@ export async function updateBooking(form: FormData) {
   const id = uuid.parse(str(form, "id"));
   const status = BOOK_STATUS.parse(str(form, "status"));
   const notes = str(form, "notes").slice(0, 5000);
-  await sql`update bookings set status = ${status}, notes = ${notes}, updated_at = now() where id = ${id}`;
+  await updateBookingStatus(id, status, notes);
   revalidatePath("/", "layout");
   redirect(`/admin/bookings/${id}?saved=1`);
 }
 
 export async function setBookingStatus(form: FormData) {
   await requireUser();
-  await sql`update bookings set status = ${BOOK_STATUS.parse(str(form, "status"))}, updated_at = now() where id = ${uuid.parse(str(form, "id"))}`;
+  await updateBookingStatus(uuid.parse(str(form, "id")), BOOK_STATUS.parse(str(form, "status")));
   revalidatePath("/", "layout");
 }
 
 export async function deleteBooking(form: FormData) {
   await requireUser("admin");
-  await sql`delete from bookings where id = ${uuid.parse(str(form, "id"))}`;
+  await removeBooking(uuid.parse(str(form, "id")));
   revalidatePath("/", "layout");
   redirect("/admin/bookings?deleted=1");
 }
@@ -122,13 +124,14 @@ export async function saveClass(form: FormData) {
   const d = classSchema.parse(Object.fromEntries(Object.keys(classSchema.shape).map((k) => [k, str(form, k)])));
   const published = bool(form, "published");
   const start = d.start_date || null;
+  const { classes, bookings } = await db();
+  const fields = { ...d, start_date: start, published, updated_at: new Date() };
   if (id) {
-    await sql`update classes set title=${d.title}, kind=${d.kind}, description=${d.description}, start_date=${start}, schedule=${d.schedule},
-      mode=${d.mode}, location=${d.location}, capacity=${d.capacity}, price=${d.price}, status=${d.status}, published=${published}, updated_at=now()
-      where id = ${uuid.parse(id)}`;
+    await classes.updateOne({ _id: uuid.parse(id) }, { $set: fields });
+    // Keep the title shown on existing bookings in step with the class name.
+    await bookings.updateMany({ class_id: id }, { $set: { class_title: d.title } });
   } else {
-    await sql`insert into classes (title, kind, description, start_date, schedule, mode, location, capacity, price, status, published)
-      values (${d.title}, ${d.kind}, ${d.description}, ${start}, ${d.schedule}, ${d.mode}, ${d.location}, ${d.capacity}, ${d.price}, ${d.status}, ${published})`;
+    await classes.insertOne({ _id: newId(), ...fields, taken: 0, created_at: new Date() });
   }
   refreshSite();
   redirect("/admin/classes?saved=1");
@@ -136,7 +139,7 @@ export async function saveClass(form: FormData) {
 
 export async function deleteClass(form: FormData) {
   await requireUser("admin");
-  await sql`delete from classes where id = ${uuid.parse(str(form, "id"))}`;
+  await removeClass(uuid.parse(str(form, "id")));
   refreshSite();
   redirect("/admin/classes?deleted=1");
 }
@@ -156,15 +159,15 @@ export async function saveService(form: FormData) {
     order: z.coerce.number().int().catch(0).parse(str(form, "sort_order")), published: bool(form, "published"),
   };
   try {
-    if (id) {
-      await sql`update services set slug=${slug}, title=${title}, icon=${icon}, summary=${v.summary}, body_md=${v.body}, whatsapp_message=${v.wa},
-        category=${category}, tile_label=${v.tile}, sort_order=${v.order}, published=${v.published}, updated_at=now() where id=${uuid.parse(id)}`;
-    } else {
-      await sql`insert into services (slug, title, icon, summary, body_md, whatsapp_message, category, tile_label, sort_order, published)
-        values (${slug}, ${title}, ${icon}, ${v.summary}, ${v.body}, ${v.wa}, ${category}, ${v.tile}, ${v.order}, ${v.published})`;
-    }
+    const { services } = await db();
+    const fields = {
+      slug, title, icon, category, summary: v.summary, body_md: v.body, whatsapp_message: v.wa,
+      tile_label: v.tile, sort_order: v.order, published: v.published, updated_at: new Date(),
+    };
+    if (id) await services.updateOne({ _id: uuid.parse(id) }, { $set: fields });
+    else await services.insertOne({ _id: newId(), ...fields });
   } catch (e) {
-    if ((e as { code?: string }).code === "23505") redirect(`/admin/services/${id || "new"}?error=slug`);
+    if (isDuplicateKey(e)) redirect(`/admin/services/${id || "new"}?error=slug`);
     throw e;
   }
   refreshSite();
@@ -173,7 +176,7 @@ export async function saveService(form: FormData) {
 
 export async function deleteService(form: FormData) {
   await requireUser("admin");
-  await sql`delete from services where id = ${uuid.parse(str(form, "id"))}`;
+  await (await db()).services.deleteOne({ _id: uuid.parse(str(form, "id")) });
   refreshSite();
   redirect("/admin/services?deleted=1");
 }
@@ -188,18 +191,17 @@ export async function saveFaq(form: FormData) {
   const answer = z.string().min(1).max(10000).parse(str(form, "answer_md"));
   const order = z.coerce.number().int().catch(0).parse(str(form, "sort_order"));
   const published = bool(form, "published");
-  if (id) {
-    await sql`update faqs set category=${category}, question=${question}, answer_md=${answer}, sort_order=${order}, published=${published}, updated_at=now() where id=${uuid.parse(id)}`;
-  } else {
-    await sql`insert into faqs (category, question, answer_md, sort_order, published) values (${category}, ${question}, ${answer}, ${order}, ${published})`;
-  }
+  const { faqs } = await db();
+  const fields = { category, question, answer_md: answer, sort_order: order, published, updated_at: new Date() };
+  if (id) await faqs.updateOne({ _id: uuid.parse(id) }, { $set: fields });
+  else await faqs.insertOne({ _id: newId(), ...fields });
   refreshSite();
   redirect("/admin/faqs?saved=1");
 }
 
 export async function deleteFaq(form: FormData) {
   await requireUser("admin");
-  await sql`delete from faqs where id = ${uuid.parse(str(form, "id"))}`;
+  await (await db()).faqs.deleteOne({ _id: uuid.parse(str(form, "id")) });
   refreshSite();
   redirect("/admin/faqs?deleted=1");
 }
@@ -218,28 +220,29 @@ export async function savePost(form: FormData) {
   const body = str(form, "body_md").slice(0, 100000);
   const dateRaw = str(form, "published_at");
   const publishedAt = status === "published" ? (dateRaw ? new Date(`${dateRaw}T08:00:00Z`) : new Date()) : null;
-  let newId = id;
+  const postId = id ? uuid.parse(id) : newId();
   try {
+    const { posts } = await db();
+    const fields = { title, slug, status, cover_url: coverUrl, excerpt, body_md: body, updated_at: new Date() };
     if (id) {
-      await sql`update posts set title=${title}, slug=${slug}, status=${status}, cover_url=${coverUrl}, excerpt=${excerpt}, body_md=${body},
-        published_at = case when ${status}::text = 'published' then coalesce(${dateRaw ? publishedAt : null}::timestamptz, published_at, now()) else published_at end,
-        updated_at=now() where id=${uuid.parse(id)}`;
+      const existing = await posts.findOne({ _id: postId }, { projection: { published_at: 1 } });
+      // Publishing keeps the original date unless a new one is chosen; drafts keep theirs for later.
+      const published_at = status === "published" ? (dateRaw ? publishedAt : existing?.published_at ?? new Date()) : existing?.published_at ?? null;
+      await posts.updateOne({ _id: postId }, { $set: { ...fields, published_at } });
     } else {
-      const [row] = await sql<{ id: string }[]>`insert into posts (title, slug, status, cover_url, excerpt, body_md, published_at, author_id)
-        values (${title}, ${slug}, ${status}, ${coverUrl}, ${excerpt}, ${body}, ${publishedAt}, ${user.id}) returning id`;
-      newId = row.id;
+      await posts.insertOne({ _id: postId, ...fields, published_at: publishedAt, author_id: user.id, created_at: new Date() });
     }
   } catch (e) {
-    if ((e as { code?: string }).code === "23505") redirect(`/admin/posts/${id || "new"}?error=slug`);
+    if (isDuplicateKey(e)) redirect(`/admin/posts/${id || "new"}?error=slug`);
     throw e;
   }
   refreshSite();
-  redirect(`/admin/posts/${newId}?saved=1`);
+  redirect(`/admin/posts/${postId}?saved=1`);
 }
 
 export async function deletePost(form: FormData) {
   await requireUser();
-  await sql`delete from posts where id = ${uuid.parse(str(form, "id"))}`;
+  await (await db()).posts.deleteOne({ _id: uuid.parse(str(form, "id")) });
   refreshSite();
   redirect("/admin/posts?deleted=1");
 }
@@ -317,9 +320,12 @@ export async function createUserAction(_: { ok?: boolean; error?: string; values
   if (!parsed.success) return { error: parsed.error.issues[0].message, values };
   const d = parsed.data;
   try {
-    await sql`insert into users (email, name, password_hash, role) values (${d.email}, ${d.name}, ${await hashPassword(d.password)}, ${d.role})`;
+    await (await db()).users.insertOne({
+      _id: newId(), email: d.email, name: d.name, password_hash: await hashPassword(d.password), role: d.role,
+      active: true, created_at: new Date(), last_login_at: null,
+    });
   } catch (e) {
-    if ((e as { code?: string }).code === "23505") return { error: "A user with that email already exists.", values };
+    if (isDuplicateKey(e)) return { error: "A user with that email already exists.", values };
     throw e;
   }
   revalidatePath("/admin/users");
@@ -331,18 +337,19 @@ export async function updateUserAction(form: FormData) {
   const id = uuid.parse(str(form, "id"));
   const op = str(form, "op");
   if (id === me.id && op !== "reset") redirect("/admin/users?error=self");
+  const { users, sessions } = await db();
   if (op === "deactivate") {
-    await sql`update users set active = false where id = ${id}`;
-    await sql`delete from sessions where user_id = ${id}`;
+    await users.updateOne({ _id: id }, { $set: { active: false } });
+    await sessions.deleteMany({ user_id: id });
   } else if (op === "activate") {
-    await sql`update users set active = true where id = ${id}`;
+    await users.updateOne({ _id: id }, { $set: { active: true } });
   } else if (op === "role") {
-    await sql`update users set role = ${z.enum(["admin", "staff"]).parse(str(form, "role"))} where id = ${id}`;
+    await users.updateOne({ _id: id }, { $set: { role: z.enum(["admin", "staff"]).parse(str(form, "role")) } });
   } else if (op === "reset") {
     const pw = z.string().min(10).safeParse(String(form.get("password") ?? ""));
     if (!pw.success) redirect("/admin/users?error=password");
-    await sql`update users set password_hash = ${await hashPassword(pw.data)} where id = ${id}`;
-    await sql`delete from sessions where user_id = ${id} and ${id !== me.id}`;
+    await users.updateOne({ _id: id }, { $set: { password_hash: await hashPassword(pw.data) } });
+    if (id !== me.id) await sessions.deleteMany({ user_id: id }); // sign them out everywhere
   }
   revalidatePath("/admin/users");
   redirect("/admin/users?saved=1");

@@ -1,5 +1,5 @@
 import { cache } from "react";
-import { sql } from "./db";
+import { db } from "./db";
 
 export type DayHours = { open: string; close: string; closed: boolean };
 
@@ -67,14 +67,12 @@ function merge<T>(base: T, over: unknown): T {
 
 /** Site-wide settings, read once per request. Missing fields fall back to defaults. */
 export const getSettings = cache(async (): Promise<SiteSettings> => {
-  const rows = await sql<{ value: unknown }[]>`select value from settings where key = 'site'`;
-  return merge(DEFAULT_SETTINGS, rows[0]?.value);
+  const doc = await (await db()).settings.findOne({ _id: "site" });
+  return merge(DEFAULT_SETTINGS, doc?.value);
 });
 
 export async function saveSettings(s: SiteSettings) {
-  await sql`
-    insert into settings (key, value, updated_at) values ('site', ${sql.json(s as never)}, now())
-    on conflict (key) do update set value = excluded.value, updated_at = now()`;
+  await (await db()).settings.updateOne({ _id: "site" }, { $set: { value: s, updated_at: new Date() } }, { upsert: true });
 }
 
 /* ---------- helpers ---------- */

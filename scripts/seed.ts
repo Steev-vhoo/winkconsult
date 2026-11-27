@@ -1,9 +1,8 @@
 /* Loads WiNK's starting content. Only inserts what is missing, so it is safe to run again. */
-import postgres from "postgres";
-import { loadEnv } from "./env";
-
-loadEnv();
-const sql = postgres(process.env.DATABASE_URL!, { prepare: false, max: 1 });
+import { randomUUID } from "node:crypto";
+import type { Db } from "mongodb";
+import { ensureIndexes } from "../src/lib/indexes";
+import { withDb } from "./env";
 
 const DRAFT = "_Draft: WiNK to confirm the details for this service._";
 
@@ -116,34 +115,41 @@ const faqs: [string, string, string][] = [
   ["IELTS", "Does the IELTS expire?", "Yes. IELTS results expire after two years."],
 ];
 
-async function main() {
+async function seed(db: Db) {
+  await ensureIndexes(db);
+  const now = new Date();
+  type Doc = { _id: string };
+
   let i = 0;
   for (const s of services) {
     i += 10;
-    await sql`
-      insert into services (slug, title, icon, summary, body_md, whatsapp_message, category, tile_label, sort_order)
-      values (${s.slug}, ${s.title}, ${s.icon}, ${s.summary}, ${s.body}, ${s.wa}, ${s.category ?? "core"}, ${s.tile}, ${i})
-      on conflict (slug) do nothing`;
+    await db.collection<Doc>("services").updateOne({ slug: s.slug }, {
+      $setOnInsert: {
+        _id: randomUUID(), slug: s.slug, title: s.title, icon: s.icon, summary: s.summary, body_md: s.body, whatsapp_message: s.wa,
+        category: s.category ?? "core", tile_label: s.tile, sort_order: i, published: true, updated_at: now,
+      },
+    }, { upsert: true });
   }
-  const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from faqs`;
-  if (n === 0) {
-    let j = 0;
-    for (const [cat, q, a] of faqs) {
-      j += 10;
-      await sql`insert into faqs (category, question, answer_md, sort_order) values (${cat}, ${q}, ${a}, ${j})`;
-    }
+
+  if ((await db.collection("faqs").countDocuments()) === 0) {
+    await db.collection<Doc>("faqs").insertMany(faqs.map(([category, question, answer_md], j) => ({
+      _id: randomUUID(), category, question, answer_md, sort_order: (j + 1) * 10, published: true, updated_at: now,
+    })));
   }
-  await sql`insert into settings (key, value) values ('site', ${sql.json({
-    banner: "Preview site: some details are still being confirmed with WiNK.",
-  })}) on conflict (key) do nothing`;
-  await sql`
-    insert into posts (slug, title, excerpt, body_md, status)
-    values ('do-you-need-moh-clearance', 'Do you need MOH International Clearance?',
-      'If you trained at a public institution (NMTC) on a 2- or 3-year programme, yes. Here is what to know.',
-      ${"If you trained at a public nursing or midwifery training college (NMTC) on a 2-year or 3-year programme, you need MOH International Clearance before you can request your NMC Foreign Verification.\n\n## When to get it\n\nDepending on your cadre, it could be after school, after your rotation, or when you are permanently posted.\n\n## How to get it\n\nIt can be purchased online on the Ministry of Health website. [Chat with us](/contact) and we'll guide you through it."},
-      'draft')
-    on conflict (slug) do nothing`;
+
+  await db.collection<Doc>("settings").updateOne({ _id: "site" }, {
+    $setOnInsert: { value: { banner: "Preview site: some details are still being confirmed with WiNK." }, updated_at: now },
+  }, { upsert: true });
+
+  await db.collection<Doc>("posts").updateOne({ slug: "do-you-need-moh-clearance" }, {
+    $setOnInsert: {
+      _id: randomUUID(), slug: "do-you-need-moh-clearance", title: "Do you need MOH International Clearance?",
+      excerpt: "If you trained at a public institution (NMTC) on a 2- or 3-year programme, yes. Here is what to know.",
+      body_md: "If you trained at a public nursing or midwifery training college (NMTC) on a 2-year or 3-year programme, you need MOH International Clearance before you can request your NMC Foreign Verification.\n\n## When to get it\n\nDepending on your cadre, it could be after school, after your rotation, or when you are permanently posted.\n\n## How to get it\n\nIt can be purchased online on the Ministry of Health website. [Chat with us](/contact) and we'll guide you through it.",
+      cover_url: null, status: "draft", published_at: null, author_id: null, created_at: now, updated_at: now,
+    },
+  }, { upsert: true });
   console.log("seed complete");
 }
 
-main().then(() => sql.end()).catch(async (e) => { console.error(e); await sql.end(); process.exit(1); });
+withDb(seed);

@@ -18,23 +18,23 @@ The public website for WiNK CONSULT, plus a private dashboard where WiNK's staff
 | Part | Choice | Cost |
 | --- | --- | --- |
 | App | Next.js 15 (App Router, server actions), TypeScript | — |
-| Database | Postgres (Supabase free tier in production) | Free |
+| Database | MongoDB Atlas (free M0 cluster, 512 MB) | Free |
 | Hosting | Vercel Hobby (free tier) | Free |
 | Email alerts | Resend (free tier: 3,000 emails/month) | Free |
 | Domain | e.g. `winkconsult.com` | ~$10–15 / year |
 
-There are no other paid services.
+There are no other paid services. Logins, sessions and spam protection are built into the app, so it needs nothing beyond MongoDB.
 
-![New enquiry email alert](docs/email-alert.png) Logins, sessions and spam protection are built into the app, so it runs on any Postgres database.
+![New enquiry email alert](docs/email-alert.png)
 
 ## Run it locally
 
-You need Node 20 or newer and a Postgres database.
+You need Node 20 or newer and a MongoDB database (a free Atlas cluster works fine for development too).
 
 ```bash
 npm install
-cp .env.example .env.local      # then fill in DATABASE_URL and APP_SECRET
-npm run db:migrate              # create the tables
+cp .env.example .env.local      # then fill in MONGODB_URI and APP_SECRET
+npm run db:setup                # create the indexes
 npm run db:seed                 # load WiNK's services, FAQs and settings
 ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='a-long-password' ADMIN_NAME='Your Name' npm run admin:create
 npm run dev                     # http://localhost:3000, admin at /admin
@@ -42,30 +42,31 @@ npm run dev                     # http://localhost:3000, admin at /admin
 
 ## Deploy to production (free tier)
 
-### 1. Database: Supabase
+### 1. Database: MongoDB Atlas
 
-1. Create a free project at [supabase.com](https://supabase.com). Pick the region closest to Ghana, such as **West EU (London)**.
-2. Open **Project Settings → Database → Connection string**, choose **Transaction pooler** (port 6543), and copy it. This is your `DATABASE_URL`.
-3. On your computer, put that URL in `.env.local` and run:
+1. Create a free account at [mongodb.com/atlas](https://www.mongodb.com/cloud/atlas) and create a **free (M0)** cluster. Pick the region closest to Ghana, such as **AWS London (eu-west-2)**.
+2. Under **Database Access**, add a database user with a long password and the **Read and write to any database** role.
+3. Under **Network Access**, allow access from anywhere (`0.0.0.0/0`). Vercel doesn't use fixed IP addresses, so this is required; the database user's password still protects the data.
+4. Choose **Connect → Drivers** and copy the connection string (`mongodb+srv://…`). Put your user's password into it. This is your `MONGODB_URI`. The app stores its data in a database called `wink` (change it with `MONGODB_DB`).
+5. On your computer, put that string in `.env.local` and run:
    ```bash
-   npm run db:migrate
+   npm run db:setup
    npm run db:seed
    ADMIN_EMAIL=… ADMIN_PASSWORD=… ADMIN_NAME=… npm run admin:create
    ```
-   Alternatively, paste `db/migrations/001_init.sql` into Supabase's **SQL Editor**.
 
-The app connects as the database owner. The migration turns on row-level security, so Supabase's public API keys can't read these tables.
+`db:setup` creates the indexes. These keep emails and web addresses unique, and they delete expired sessions and old sign-in attempts automatically. It's safe to run again at any time.
 
 ### 2. Hosting: Vercel
 
 1. In [vercel.com](https://vercel.com), choose **Add New → Project** and import the `winkconsult` GitHub repository.
 2. Add these environment variables:
-   - `DATABASE_URL`: the Supabase pooler URL
+   - `MONGODB_URI`: the Atlas connection string
    - `APP_SECRET`: a long random string; generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
    - `SITE_URL`: e.g. `https://www.winkconsult.com` (used for the dashboard link in alert emails)
    - `RESEND_API_KEY` and `EMAIL_FROM`: for email alerts (see below)
-   - Set each variable for **Production** and **Preview**. The build reads the database to pre-render pages, so `DATABASE_URL` must be set, and the migration from step 1 already run, **before** the first deploy. Otherwise the build fails with "DATABASE_URL is not set" or "relation does not exist".
-3. Deploy. The site runs in Vercel's London region (`lhr1`), close to both the Supabase database and visitors in Ghana. `vercel.json` sets up a daily health check. It keeps the free Supabase database from pausing, which happens after a week with no activity.
+   - Set each variable for **Production** and **Preview**. The build reads the database to pre-render pages, so `MONGODB_URI` must be set, and step 1 completed, **before** the first deploy. Otherwise the build fails with "MONGODB_URI is not set" or a connection timeout (check Network Access in Atlas).
+3. Deploy. The site runs in Vercel's London region (`lhr1`), close to both an Atlas cluster in London and visitors in Ghana. `vercel.json` also sets up a daily health check that pings the database.
 
 ### 3. Email alerts: Resend
 
@@ -107,5 +108,5 @@ Buy the domain from any registrar. In Vercel, open **Project → Settings → Do
 ## Not included yet
 
 - **Alerts for bookings, and SMS alerts.** Only new enquiries trigger an email. Bookings could use the same mechanism.
-- **Image uploads for posts.** Posts currently link to a cover image by URL; Supabase Storage could add uploads later.
+- **Image uploads for posts.** Posts currently link to a cover image by URL; a storage service such as Cloudinary or Vercel Blob could add uploads later.
 - **Online payments.** Booking confirmations ask clients to pay by MoMo or bank transfer; Paystack could be added later.

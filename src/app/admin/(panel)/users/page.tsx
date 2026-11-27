@@ -1,6 +1,6 @@
 import { Flash, Pill, Topbar } from "@/components/admin/ui";
+import { listUsers } from "@/lib/admin-data";
 import { requireUser } from "@/lib/auth";
-import { sql } from "@/lib/db";
 import { fmtDate } from "@/lib/content";
 import { updateUserAction } from "../../actions";
 import { NewUserForm, ResetPassword } from "./UserForms";
@@ -11,10 +11,7 @@ export default async function Users({ searchParams }: { searchParams: Promise<Re
   const me = await requireUser("admin");
   const [sp, rows] = await Promise.all([
     searchParams,
-    sql<{ id: string; name: string; email: string; role: string; active: boolean; created_at: Date; last: Date | null }[]>`
-      select u.id, u.name, u.email, u.role, u.active, u.created_at,
-             (select max(created_at) from login_attempts a where a.email = u.email and a.success) as last
-      from users u order by u.active desc, u.name`,
+    listUsers(),
   ]);
   return (
     <>

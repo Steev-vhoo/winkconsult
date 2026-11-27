@@ -3,9 +3,9 @@ import { notFound } from "next/navigation";
 import { ConfirmButton } from "@/components/admin/ConfirmButton";
 import { MarkdownEditor } from "@/components/admin/MarkdownEditor";
 import { Flash, Pill, Topbar } from "@/components/admin/ui";
+import { getPost } from "@/lib/admin-data";
 import { requireUser } from "@/lib/auth";
 import { type Post } from "@/lib/content";
-import { sql } from "@/lib/db";
 import { deletePost, savePost } from "../../../actions";
 
 export const metadata = { title: "Edit update" };
@@ -15,7 +15,7 @@ export default async function EditPost({ params, searchParams }: { params: Promi
   const [{ id }, sp] = await Promise.all([params, searchParams]);
   const isNew = id === "new";
   if (!isNew && !/^[0-9a-f-]{36}$/i.test(id)) notFound();
-  const p: Partial<Post> | undefined = isNew ? { status: "draft", body_md: "" } : (await sql<Post[]>`select * from posts where id = ${id}`)[0];
+  const p: Partial<Post> | undefined = isNew ? { status: "draft", body_md: "" } : await getPost(id);
   if (!p) notFound();
   const pubDate = p.published_at ? new Date(p.published_at).toISOString().slice(0, 10) : "";
 
